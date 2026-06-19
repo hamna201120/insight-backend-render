@@ -14,7 +14,7 @@ passlib[bcrypt]==1.7.4
 python-multipart==0.0.6
 
 # ⭐ WHISPER
-openai-whisper==20231117
+git+https://github.com/openai/whisper.git
 yt-dlp==2023.11.14
 ffmpeg-python==0.2.0
 youtube-transcript-api==0.6.1
