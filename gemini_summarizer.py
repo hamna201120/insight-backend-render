@@ -1,4 +1,4 @@
-# gemini_summarizer.py - Gemini 2.5 Models (FIXED INDENTATION)
+# gemini_summarizer.py - Gemini 2.5 Models (NO BART FALLBACK)
 import os
 from google import genai
 from typing import List, Dict, Optional
@@ -7,36 +7,12 @@ import json
 import re
 from api_key_rotator import key_rotator
 
-# Try to import BART for fallback
-try:
-    from transformers import pipeline
-    BART_AVAILABLE = True
-except ImportError:
-    BART_AVAILABLE = False
-    print("⚠️ BART not available. Install with: pip install transformers torch")
-
 class GeminiSummarizer:
     def __init__(self):
-        """Initialize with automatic key rotation and BART fallback"""
+        """Initialize with automatic key rotation"""
         self.client = None
         self.current_key = None
         self.max_retries = 10
-        self.bart_summarizer = None
-        
-        # Load BART fallback
-        if BART_AVAILABLE:
-            try:
-                print("📥 Loading BART fallback model...")
-                self.bart_summarizer = pipeline(
-                    "summarization",
-                    model="facebook/bart-large-cnn",
-                    device=-1,
-                    truncation=True
-                )
-                print("✅ BART fallback loaded successfully")
-            except Exception as e:
-                print(f"⚠️ BART loading failed: {e}")
-                self.bart_summarizer = None
         
         # Initialize with first available key
         self._initialize_with_available_key()
@@ -49,7 +25,6 @@ class GeminiSummarizer:
             return False
         
         try:
-            # NEW SDK: Use genai.Client
             self.client = genai.Client(api_key=key)
             self.current_key = key
             print(f"✅ Gemini 2.5 Flash initialized with key: {key[:10]}...")
@@ -64,124 +39,6 @@ class GeminiSummarizer:
         if error and self.current_key:
             key_rotator.mark_key_failed(self.current_key, error)
         return self._initialize_with_available_key()
-    
-    def _use_bart_fallback(self, transcript: str, duration_minutes: float) -> Dict:
-        """Use BART as fallback when all Gemini keys fail"""
-        print("🚨 ALL GEMINI KEYS EXHAUSTED! Using BART fallback...")
-        
-        if not self.bart_summarizer:
-            return self._extractive_fallback(transcript)
-        
-        try:
-            words = transcript.split()
-            chunk_size = 500
-            chunks = []
-            
-            for i in range(0, min(len(words), 3000), chunk_size):
-                chunk = ' '.join(words[i:i+chunk_size])
-                chunks.append(chunk)
-            
-            summaries = []
-            for chunk in chunks[:3]:
-                try:
-                    summary = self.bart_summarizer(
-                        chunk,
-                        max_length=150,
-                        min_length=50,
-                        do_sample=False
-                    )[0]["summary_text"]
-                    summaries.append(summary)
-                except:
-                    summaries.append(chunk[:200] + "...")
-            
-            final_summary = ' '.join(summaries)
-            
-            if len(final_summary.split()) > 200:
-                try:
-                    final_summary = self.bart_summarizer(
-                        final_summary,
-                        max_length=150,
-                        min_length=60,
-                        do_sample=False
-                    )[0]["summary_text"]
-                except:
-                    pass
-            
-            return {
-                "short_summary": final_summary[:300] + "..." if len(final_summary) > 300 else final_summary,
-                "detailed_summary": final_summary[:1000] if len(final_summary) > 1000 else final_summary,
-                "key_points": self._extract_key_points(transcript),
-                "topics_covered": self._extract_topics(transcript),
-                "recommendations": [
-                    "This summary was generated using BART (Gemini API keys were exhausted)",
-                    "Consider watching the full video for complete understanding"
-                ],
-                "value_summary": "Content summary using BART fallback",
-                "watch_decision": {
-                    "best_for": "All viewers",
-                    "worth_watching": True,
-                    "why": "Contains valuable information"
-                },
-                "processing_method": "bart_fallback",
-                "ai_model_used": "BART (Fallback)",
-                "gemini_failed": True,
-                "chunks_processed": len(chunks)
-            }
-        except Exception as e:
-            print(f"❌ BART fallback failed: {e}")
-            return self._extractive_fallback(transcript)
-    
-    def _extractive_fallback(self, transcript: str) -> Dict:
-        """Ultimate extractive fallback when everything fails"""
-        sentences = re.split(r'(?<=[.!?])\s+', transcript)
-        
-        if len(sentences) <= 10:
-            selected = sentences
-        else:
-            selected = sentences[:5] + sentences[-5:]
-        
-        summary = ' '.join(selected)
-        
-        return {
-            "short_summary": summary[:300] + "..." if len(summary) > 300 else summary,
-            "detailed_summary": summary[:800] + "..." if len(summary) > 800 else summary,
-            "key_points": ["Video content extracted using fallback method"],
-            "topics_covered": ["General Content"],
-            "recommendations": ["Watch the full video for complete understanding"],
-            "value_summary": "Extractive summary from transcript",
-            "watch_decision": {
-                "best_for": "All viewers",
-                "worth_watching": True,
-                "why": "Contains valuable information"
-            },
-            "processing_method": "extractive_fallback",
-            "ai_model_used": "Extractive (Final Fallback)",
-            "gemini_failed": True
-        }
-    
-    def _extract_key_points(self, text: str) -> List[str]:
-        """Extract key points from text (for BART fallback)"""
-        sentences = re.split(r'(?<=[.!?])\s+', text)
-        keywords = ['important', 'key', 'critical', 'main', 'essential', 'significant']
-        result = []
-        for sent in sentences[:20]:
-            if any(kw in sent.lower() for kw in keywords):
-                if len(sent.split()) > 5:
-                    result.append(sent)
-        return result[:5] if result else sentences[:5]
-    
-    def _extract_topics(self, text: str) -> List[str]:
-        """Extract topics from text (for BART fallback)"""
-        words = text.lower().split()
-        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
-                     'of', 'with', 'by', 'is', 'are', 'was', 'were', 'this', 'that', 'it'}
-        word_freq = {}
-        for word in words:
-            word = word.strip('.,!?;:"\'()[]{}')
-            if word not in stop_words and len(word) > 3 and word.isalpha():
-                word_freq[word] = word_freq.get(word, 0) + 1
-        top_words = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:5]
-        return [w.capitalize() for w, _ in top_words] if top_words else ["General Content"]
     
     def _parse_response(self, response_text: str) -> Dict:
         """Parse Gemini response, handling JSON and text formats"""
@@ -230,7 +87,7 @@ class GeminiSummarizer:
         }
     
     def summarize_video(self, transcript: str, duration_minutes: float = 0, detailed: bool = True) -> Dict:
-        """Generate comprehensive video summary with auto-rotation - NO WAITING"""
+        """Generate comprehensive video summary with auto-rotation"""
         
         transcript = transcript.strip()
         
@@ -273,9 +130,18 @@ Format as valid JSON only. No other text."""
             try:
                 if not self.client:
                     if not self._initialize_with_available_key():
-                        # No keys available, immediately use BART
-                        print("🚨 No Gemini keys available! Using BART fallback...")
-                        return self._use_bart_fallback(transcript, duration_minutes)
+                        print("❌ No Gemini keys available!")
+                        return {
+                            "short_summary": "No Gemini API keys available",
+                            "detailed_summary": "Please add valid Gemini API keys",
+                            "key_points": ["No key points available"],
+                            "topics_covered": ["N/A"],
+                            "recommendations": ["Add Gemini API keys in Railway variables"],
+                            "value_summary": "Processing failed due to missing API keys",
+                            "watch_decision": {"best_for": "N/A", "worth_watching": False, "why": "No API keys available"},
+                            "ai_model_used": "None",
+                            "processing_method": "error"
+                        }
                 
                 # Use Gemini 2.5 Flash
                 response = self.client.models.generate_content(
@@ -305,23 +171,37 @@ Format as valid JSON only. No other text."""
                 
                 # Check if error is quota/rate limit related
                 if any(kw in error_msg for kw in ['quota', 'rate limit', '429', 'too many', 'daily']):
-                    # Mark current key as exhausted
                     if self.current_key:
                         key_rotator.mark_key_failed(self.current_key, e)
                     
-                    # IMMEDIATELY try next key (no waiting!)
                     if not self._initialize_with_available_key():
-                        # No keys available, use BART
-                        print("🚨 All Gemini keys exhausted! Using BART fallback...")
-                        return self._use_bart_fallback(transcript, duration_minutes)
-                    
-                    # Continue loop with next key
+                        print("🚨 All Gemini keys exhausted!")
+                        return {
+                            "short_summary": "All Gemini API keys exhausted",
+                            "detailed_summary": "Please add more API keys or wait for quota reset",
+                            "key_points": ["No key points available"],
+                            "topics_covered": ["N/A"],
+                            "recommendations": ["Add more Gemini API keys in Railway variables"],
+                            "value_summary": "Processing failed due to quota limits",
+                            "watch_decision": {"best_for": "N/A", "worth_watching": False, "why": "API quota exhausted"},
+                            "ai_model_used": "None",
+                            "processing_method": "quota_exhausted"
+                        }
                     continue
                 else:
-                    # Other error (not quota related) - still try next key
                     self._rotate_key(e)
                     continue
         
-        # If all attempts fail, use BART fallback
-        print("🚨 All Gemini attempts failed! Using BART fallback...")
-        return self._use_bart_fallback(transcript, duration_minutes)
+        # If all attempts fail
+        print("🚨 All Gemini attempts failed!")
+        return {
+            "short_summary": "All Gemini API attempts failed",
+            "detailed_summary": "Please check your API keys and try again",
+            "key_points": ["No key points available"],
+            "topics_covered": ["N/A"],
+            "recommendations": ["Check Gemini API keys in Railway variables"],
+            "value_summary": "Processing failed due to API errors",
+            "watch_decision": {"best_for": "N/A", "worth_watching": False, "why": "API errors"},
+            "ai_model_used": "None",
+            "processing_method": "error"
+        }
