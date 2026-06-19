@@ -1,6 +1,6 @@
 # ⚠️ CRITICAL: Build tools MUST be first!
-setuptools>=65.0.0
-wheel>=0.38.0
+setuptools==69.5.1
+wheel==0.42.0
 
 # FastAPI & Database
 fastapi==0.104.1
