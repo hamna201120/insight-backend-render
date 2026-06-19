@@ -7,6 +7,8 @@ fastapi==0.104.1
 uvicorn[standard]==0.24.0
 sqlmodel==0.0.14
 sqlalchemy==2.0.23
+passlib[argon2]
+argon2-cffi
 
 # Authentication
 python-jose[cryptography]==3.3.0
