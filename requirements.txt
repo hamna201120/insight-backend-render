@@ -9,7 +9,7 @@ sqlmodel==0.0.14
 sqlalchemy==2.0.23
 passlib[argon2]
 argon2-cffi
-
+yt-dlp>=2024.4.9
 
 # Authentication
 python-jose[cryptography]==3.3.0
