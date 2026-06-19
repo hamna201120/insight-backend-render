@@ -66,21 +66,37 @@ def get_progress(video_id: str) -> Dict:
     })
 
 # ============================
-# GET COOKIES FUNCTION (UPDATED)
+# GET COOKIES FUNCTION - FIXED
 # ============================
 def get_youtube_cookies():
     """Extract YouTube cookies from browser with multiple fallbacks"""
     cookies_path = None
     
-    # Try browser cookies only if available (local development)
+    # 1. Try environment variable first (for Render)
+    cookies_b64 = os.environ.get('YOUTUBE_COOKIES_B64')
+    if cookies_b64:
+        try:
+            import base64
+            cookies_content = base64.b64decode(cookies_b64).decode('utf-8')
+            
+            # Verify it's valid Netscape format
+            if '# Netscape HTTP Cookie File' not in cookies_content:
+                print("⚠️ Environment cookies not in Netscape format, skipping")
+            else:
+                cookies_path = os.path.join(tempfile.gettempdir(), 'youtube_cookies_env.txt')
+                with open(cookies_path, 'w') as f:
+                    f.write(cookies_content)
+                print("✅ Loaded cookies from environment variable")
+                return cookies_path
+        except Exception as e:
+            print(f"⚠️ Failed to load cookies from env: {e}")
+    
+    # 2. Try browser cookies (local development)
     if BROWSER_COOKIE_AVAILABLE:
-        # Try multiple browsers
         browsers = [
             ('chrome', browser_cookie3.chrome),
             ('firefox', browser_cookie3.firefox),
             ('edge', browser_cookie3.edge),
-            ('opera', browser_cookie3.opera),
-            ('brave', browser_cookie3.brave),
         ]
         
         for browser_name, browser_func in browsers:
@@ -89,42 +105,34 @@ def get_youtube_cookies():
                 cookies = browser_func(domain_name='.youtube.com')
                 
                 if cookies:
-                    # Save cookies to file
                     cookies_path = os.path.join(tempfile.gettempdir(), f'youtube_cookies_{browser_name}.txt')
                     with open(cookies_path, 'w') as f:
                         f.write('# Netscape HTTP Cookie File\n')
                         for cookie in cookies:
-                            if cookie.domain.endswith('youtube.com') or cookie.domain.endswith('.youtube.com'):
-                                f.write(f"{cookie.domain}\tTRUE\t{cookie.path}\t{'TRUE' if cookie.secure else 'FALSE'}\t{cookie.expires if cookie.expires else 0}\t{cookie.name}\t{cookie.value}\n")
-                    
-                    print(f"✅ Successfully extracted cookies from {browser_name}")
+                            if 'youtube.com' in cookie.domain:
+                                secure = 'TRUE' if cookie.secure else 'FALSE'
+                                expires = str(int(cookie.expires)) if cookie.expires else '0'
+                                f.write(f"{cookie.domain}\tTRUE\t{cookie.path}\t{secure}\t{expires}\t{cookie.name}\t{cookie.value}\n")
+                    print(f"✅ Extracted cookies from {browser_name}")
                     return cookies_path
             except Exception as e:
                 print(f"⚠️ Could not get cookies from {browser_name}: {e}")
                 continue
-    else:
-        print("ℹ️ browser-cookie3 not available, skipping browser cookie extraction")
     
-    # Fallback: Check if cookies.txt exists in project directory
+    # 3. Try cookies.txt file
     if os.path.exists('cookies.txt'):
-        print("✅ Found cookies.txt file in project directory")
-        return 'cookies.txt'
-    
-    # Try to get cookies from environment variable (for Render)
-    cookies_b64 = os.environ.get('YOUTUBE_COOKIES_B64')
-    if cookies_b64:
         try:
-            import base64
-            cookies_content = base64.b64decode(cookies_b64).decode('utf-8')
-            cookies_path = os.path.join(tempfile.gettempdir(), 'youtube_cookies_env.txt')
-            with open(cookies_path, 'w') as f:
-                f.write(cookies_content)
-            print("✅ Loaded cookies from environment variable")
-            return cookies_path
+            with open('cookies.txt', 'r') as f:
+                content = f.read()
+                if '# Netscape HTTP Cookie File' in content:
+                    print("✅ Found valid cookies.txt file")
+                    return 'cookies.txt'
+                else:
+                    print("⚠️ cookies.txt exists but invalid format")
         except Exception as e:
-            print(f"⚠️ Failed to load cookies from env: {e}")
+            print(f"⚠️ Error reading cookies.txt: {e}")
     
-    print("⚠️ No cookies found. Will try without cookies...")
+    print("⚠️ No valid cookies found. Will try without cookies...")
     return None
 
 # ============================
@@ -134,13 +142,11 @@ try:
     from gemini_summarizer import GeminiSummarizer
     from api_key_rotator import key_rotator
     
-    # Initialize with auto-rotation (loads all keys from environment)
     gemini_summarizer = GeminiSummarizer()
     USE_GEMINI = True
     print("✅" + "="*50)
     print("✅ Gemini 2.0 (NEW SDK) with AUTO-ROTATE initialized!")
     print(f"✅ {len(key_rotator.keys)} API keys loaded")
-    print("✅ BART fallback available if all keys fail")
     print("✅" + "="*50)
     
 except Exception as e:
@@ -154,16 +160,13 @@ except Exception as e:
 try:
     from hierarchical_summarizer import HierarchicalSummarizer
     from smart_chunker import SmartChunker
-    import traceback
     
     HIERARCHICAL_AVAILABLE = True
-    
-    # Initialize the hierarchical summarizer as fallback
     hierarchical_summarizer = HierarchicalSummarizer()
     chunker = SmartChunker(max_chunk_size=800, min_chunk_size=250)
     
     if not USE_GEMINI:
-        print("✅ Using HIERARCHICAL summarizer as primary (Gemini not available)")
+        print("✅ Using HIERARCHICAL summarizer as primary")
     else:
         print("✅ Hierarchical summarizer available as fallback")
     
@@ -173,13 +176,11 @@ except ImportError as e:
     hierarchical_summarizer = None
     chunker = None
     
-    # Create a dummy summarizer as final fallback
     class DummySummarizationService:
         def generate_hierarchical_summaries(self, chunks, duration_minutes=0):
             text = ' '.join([c.get('text', '') for c in chunks if c.get('text')])
             words = text.split()[:50]
             sample = " ".join(words)
-            
             return {
                 "short_summary": f"This video discusses various topics. {sample[:100]}",
                 "detailed_summary": f"Video content summary. {sample[:200]}",
@@ -215,8 +216,6 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token", auto_error=False)
 # ============================
 # STARTUP
 # ============================
-
-# Add FFmpeg to PATH if not found
 ffmpeg_paths = [
     r"C:\ffmpeg\bin",
     r"C:\Users\LENOVO\Downloads\ffmpeg-master-latest-win64-gpl-shared\ffmpeg-master-latest-win64-gpl-shared\bin",
@@ -234,7 +233,6 @@ else:
 @app.on_event("startup")
 def on_startup():
     init_db()
-    # Test FFmpeg availability on startup
     try:
         result = subprocess.run(['ffmpeg', '-version'], 
                               capture_output=True, text=True, timeout=5)
@@ -249,38 +247,27 @@ def on_startup():
 # URL NORMALIZATION FUNCTION
 # ============================
 def normalize_youtube_url(url: str) -> str:
-    """Normalize YouTube URL by removing tracking parameters and standardizing format"""
     video_id = extract_video_id(url)
     return f"https://www.youtube.com/watch?v={video_id}"
 
 def extract_video_id(url: str) -> str:
-    """Extract YouTube video ID from various URL formats including shorts"""
-    # Handle youtu.be format
     if "youtu.be/" in url:
         video_id = url.split("youtu.be/")[1].split("?")[0].split("&")[0]
         return video_id
-    
-    # Handle youtube.com/watch?v= format
     if "watch?v=" in url:
         video_id = url.split("watch?v=")[1].split("&")[0].split("?")[0]
         return video_id
-    
-    # Handle youtube.com/shorts/ format
     if "shorts/" in url:
         video_id = url.split("shorts/")[1].split("?")[0].split("&")[0]
         return video_id
-    
-    # Handle embedded URLs
     if "embed/" in url:
         video_id = url.split("embed/")[1].split("?")[0].split("&")[0]
         return video_id
-    
     raise HTTPException(status_code=400, detail="INVALID_YOUTUBE_URL")
 
 # ============================
 # SCHEMAS
 # ============================
-
 class RegisterRequest(BaseModel):
     name: str
     email: str
@@ -316,12 +303,8 @@ class SummarizeRequest(BaseModel):
     youtube_url: str
     save_to_history: bool = False
 
-# ============================
-# FEEDBACK SCHEMAS
-# ============================
-
 class FeedbackRequest(BaseModel):
-    rating: int  # 1-5
+    rating: int
     comment: Optional[str] = None
 
 # ============================
@@ -331,10 +314,8 @@ async def get_current_user_optional(
     token: Optional[str] = Depends(oauth2_scheme),
     session: Session = Depends(get_session),
 ) -> Optional[User]:
-    """Get current user if token is valid, otherwise return None"""
     if not token:
         return None
-    
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
@@ -342,7 +323,6 @@ async def get_current_user_optional(
             return None
     except JWTError:
         return None
-
     user = crud.get_user_by_email(session, email)
     return user
 
@@ -350,20 +330,17 @@ async def get_current_user_required(
     token: str = Depends(oauth2_scheme),
     session: Session = Depends(get_session),
 ) -> User:
-    """Get current user or raise 401 if not authenticated"""
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="MISSING_TOKEN",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="INVALID_TOKEN",
         headers={"WWW-Authenticate": "Bearer"},
     )
-
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
@@ -371,11 +348,9 @@ async def get_current_user_required(
             raise credentials_exception
     except JWTError:
         raise credentials_exception
-
     user = crud.get_user_by_email(session, email)
     if not user:
         raise credentials_exception
-
     return user
 
 # ============================
@@ -387,12 +362,10 @@ def register(req: RegisterRequest, session: Session = Depends(get_session)):
         user = crud.create_user(session, req.name, req.email, req.password)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
     access_token = create_access_token(
         data={"sub": user.email, "user_id": user.id},
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
     )
-
     return Token(
         access_token=access_token,
         token_type="bearer",
@@ -407,15 +380,12 @@ def login(req: LoginRequest, session: Session = Depends(get_session)):
     user = crud.get_user_by_email(session, req.email)
     if not user:
         raise HTTPException(status_code=404, detail="USER_NOT_FOUND")
-
     if not verify_password(req.password, user.password_hash):
         raise HTTPException(status_code=401, detail="INVALID_PASSWORD")
-
     access_token = create_access_token(
         data={"sub": user.email, "user_id": user.id},
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
     )
-
     return Token(
         access_token=access_token,
         token_type="bearer",
@@ -438,13 +408,11 @@ def me(current_user: User = Depends(get_current_user_required)):
 # ============================
 @app.get("/progress/{video_id}")
 def get_video_progress(video_id: str):
-    """Get real-time progress of video summarization"""
     return get_progress(video_id)
 
 # ============================
-# YOUTUBE HELPERS - UPDATED WITH COOKIES
+# YOUTUBE HELPERS - FIXED
 # ============================
-
 YOUTUBE_REGEX = re.compile(
     r"(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)[\w\-]+"
 )
@@ -453,11 +421,10 @@ def is_valid_youtube_url(url: str) -> bool:
     return bool(YOUTUBE_REGEX.match(url))
 
 def get_video_metadata(url: str) -> dict:
-    """Get video metadata with cookies and proper headers"""
     try:
-        # Get cookies from browser
         cookies_path = get_youtube_cookies()
         
+        # FIX: Use updated yt-dlp options with better format selection
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
@@ -468,17 +435,11 @@ def get_video_metadata(url: str) -> dict:
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 'Accept-Language': 'en-us,en;q=0.5',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'same-origin',
-                'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-                'Sec-Ch-Ua-Mobile': '?0',
-                'Sec-Ch-Ua-Platform': '"Windows"',
             },
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android', 'web'],
-                    'skip': ['webpage', 'dash'],
-                    'player_skip': ['configs'],
+                    'player_client': ['android', 'web'],  # Try android first
+                    'skip': ['hls', 'dash'],  # Skip problematic formats
                 }
             }
         }
@@ -506,14 +467,13 @@ def get_video_metadata(url: str) -> dict:
 def get_video_transcript(video_id: str) -> str:
     """Extract audio from YouTube video and transcribe using Whisper"""
     try:
-        # Try to get transcript using youtube_transcript_api first (faster, no download)
+        # Try transcript API first
         try:
             from youtube_transcript_api import YouTubeTranscriptApi
             
             print(f"📝 Attempting to fetch transcript directly for video: {video_id}")
             transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
             
-            # Try to get English transcript
             transcript = None
             for t in transcript_list:
                 if t.language_code.startswith('en'):
@@ -521,62 +481,53 @@ def get_video_transcript(video_id: str) -> str:
                     break
             
             if not transcript:
-                # If no English transcript found, get the first available
                 transcript = next(iter(transcript_list))
             
             transcript_data = transcript.fetch()
             transcript_text = " ".join([item['text'] for item in transcript_data])
-            print(f"✅ Direct transcript fetched successfully: {len(transcript_text)} characters, {len(transcript_text.split())} words")
+            print(f"✅ Direct transcript fetched successfully: {len(transcript_text)} characters")
             return transcript_text
             
-        except ImportError:
-            print("⚠️ youtube_transcript_api not installed. Install with: pip install youtube-transcript-api")
         except Exception as e:
             print(f"⚠️ Direct transcript fetch failed: {e}")
         
-        # If direct transcript fails, fall back to audio download with cookies
+        # Fallback: Download audio with FIXED options
         with tempfile.TemporaryDirectory() as tmpdir:
             print(f"🔊 Downloading audio for video: {video_id}")
             
-            # Get cookies from browser
             cookies_path = get_youtube_cookies()
             
-            # Improved yt-dlp options with cookies
+            # FIX: Use best format with better fallback
             ydl_opts = {
-                'format': 'bestaudio/best',
+                'format': 'bestaudio[ext=m4a]/bestaudio[ext=aac]/bestaudio[ext=webm]/bestaudio/best',  # Try multiple formats
                 'outtmpl': os.path.join(tmpdir, 'audio.%(ext)s'),
                 'quiet': False,
                 'no_warnings': False,
                 'postprocessors': [{
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': 'mp3',
-                    'preferredquality': '192',
+                    'preferredquality': '128',  # Lower quality = faster download
                 }],
                 'extract_audio': True,
                 'audio_format': 'mp3',
-                'retries': 10,
-                'fragment_retries': 10,
+                'retries': 20,  # More retries
+                'fragment_retries': 20,
                 'skip_unavailable_fragments': True,
                 'cookiefile': cookies_path if cookies_path else None,
                 'http_headers': {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                     'Accept-Language': 'en-us,en;q=0.5',
-                    'Sec-Fetch-Mode': 'navigate',
-                    'Sec-Fetch-Site': 'same-origin',
-                    'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-                    'Sec-Ch-Ua-Mobile': '?0',
-                    'Sec-Ch-Ua-Platform': '"Windows"',
                 },
                 'extractor_args': {
                     'youtube': {
-                        'player_client': ['android', 'web'],
-                        'skip': ['webpage', 'dash'],
-                        'player_skip': ['configs'],
+                        'player_client': ['android', 'web'],  # Try android first
+                        'skip': ['hls', 'dash'],  # Skip problematic formats
                     }
                 },
-                'socket_timeout': 30,
+                'socket_timeout': 60,  # Longer timeout
                 'verbose': False,
+                'concurrent_fragment_downloads': 1,  # Slower but more reliable
             }
             
             video_url = f"https://www.youtube.com/watch?v={video_id}"
@@ -590,12 +541,11 @@ def get_video_transcript(video_id: str) -> str:
                     print(f"✅ Successfully downloaded: {video_title}")
                 
                 # Find downloaded audio file
-                audio_files = list(Path(tmpdir).glob("*.mp3"))
-                if not audio_files:
-                    for ext in ['.m4a', '.webm', '.opus']:
-                        audio_files = list(Path(tmpdir).glob(f"*{ext}"))
-                        if audio_files:
-                            break
+                audio_files = []
+                for ext in ['.mp3', '.m4a', '.aac', '.webm', '.opus']:
+                    audio_files = list(Path(tmpdir).glob(f"*{ext}"))
+                    if audio_files:
+                        break
                 
                 if not audio_files:
                     raise Exception("No audio file found after download")
@@ -607,16 +557,15 @@ def get_video_transcript(video_id: str) -> str:
                 error_msg = str(e)
                 print(f"❌ Download failed: {error_msg[:200]}")
                 
-                # Check for specific errors
                 if "Sign in to confirm" in error_msg:
                     raise HTTPException(
                         status_code=400, 
-                        detail="YouTube is asking for verification. Please add cookies.txt to your project or set YOUTUBE_COOKIES_B64 environment variable"
+                        detail="YouTube requires verification. Please set YOUTUBE_COOKIES_B64 environment variable with valid cookies"
                     )
-                elif "This video is unavailable" in error_msg:
+                elif "403" in error_msg:
                     raise HTTPException(
                         status_code=400, 
-                        detail="Video is unavailable or private"
+                        detail="YouTube is blocking the request. Try:\n1. Update cookies\n2. Try a different video\n3. Wait a few minutes"
                     )
                 else:
                     raise HTTPException(
@@ -624,13 +573,11 @@ def get_video_transcript(video_id: str) -> str:
                         detail=f"Could not download video audio: {error_msg[:100]}"
                     )
             
-            # If we got here, we have an audio file
             if not audio_path:
                 raise HTTPException(status_code=400, detail="Failed to download audio")
             
             # Load Whisper model
             print("🧠 Loading Whisper model...")
-            print("STAGE:TRANSCRIBING")
             try:
                 model = whisper.load_model("base")
                 print("✅ Whisper model loaded (base)")
@@ -682,11 +629,8 @@ def get_video_transcript(video_id: str) -> str:
 # DUPLICATE CHECKING FUNCTION
 # ============================
 def check_existing_video(session: Session, user_id: int, url: str) -> Optional[Video]:
-    """Check if user already has this video in history using normalized URL"""
-    # Normalize the URL for consistent comparison
     normalized_url = normalize_youtube_url(url)
     print(f"🔍 Checking for existing video with normalized URL: {normalized_url}")
-    
     statement = select(Video).where(
         (Video.owner_id == user_id) & 
         (Video.url == normalized_url)
@@ -702,31 +646,23 @@ def summarize_video(
     current_user: Optional[User] = Depends(get_current_user_optional),
     session: Session = Depends(get_session),
 ):
-    """
-    Summarize a YouTube video using Gemini (if available) or fallback to BART.
-    """
     try:
         original_url = req.youtube_url.strip()
-        
-        # Extract video ID for progress tracking
         video_id = extract_video_id(original_url)
         update_progress(video_id, "starting", 0, "Initializing video analysis...")
 
         if not is_valid_youtube_url(original_url):
             raise HTTPException(status_code=400, detail="NOT_YOUTUBE_URL")
         
-        # Normalize URL for consistent handling
         normalized_url = normalize_youtube_url(original_url)
         print(f"🌐 Original URL: {original_url}")
         print(f"🔗 Normalized URL: {normalized_url}")
         
-        # Handle authentication status
         is_authenticated = current_user is not None
         user_id = current_user.id if current_user else None
         
         print(f"🔐 Request from {'authenticated user' if is_authenticated else 'unauthenticated user'}")
         
-        # Check for existing video only if authenticated
         if is_authenticated:
             existing_video = check_existing_video(session, user_id, normalized_url)
             if existing_video:
@@ -758,7 +694,6 @@ def summarize_video(
 
         print("STAGE:DOWNLOADING")
         update_progress(video_id, "downloading", 5, "Validating YouTube URL...")
-        
         update_progress(video_id, "downloading", 10, "Fetching video metadata...")
         
         metadata = get_video_metadata(normalized_url)
@@ -772,10 +707,8 @@ def summarize_video(
             raise HTTPException(status_code=400, detail="DURATION_NOT_FOUND")
 
         duration_minutes = duration_sec / 60
-
         video_id = extract_video_id(normalized_url)
         
-        # Get transcript
         update_progress(video_id, "transcribing", 30, "Extracting audio from video...")
         transcript_text = get_video_transcript(video_id)
         update_progress(video_id, "transcribing", 55, "Transcription complete! Processing text...")
@@ -783,7 +716,6 @@ def summarize_video(
         word_count = len(transcript_text.split())
         print(f"📝 Got transcript: {word_count} words, {duration_minutes:.1f} minutes")
 
-        # ===== CHOOSE SUMMARIZER =====
         print("STAGE:SUMMARIZING")
         update_progress(video_id, "analyzing", 60, "Preparing content for AI analysis...")
         
@@ -791,13 +723,11 @@ def summarize_video(
         model_used = "Unknown"
         processing_method = "standard"
         
-        # Try Gemini first if available
         if USE_GEMINI and gemini_summarizer:
             try:
                 print("🤖" + "="*50)
                 print("🤖 Using Gemini for high-quality summarization...")
                 print("🤖" + "="*50)
-                
                 update_progress(video_id, "analyzing", 65, "Running Gemini AI analysis...")
                 
                 ai_results = gemini_summarizer.summarize_video(
@@ -809,47 +739,28 @@ def summarize_video(
                 if ai_results and ai_results.get("short_summary") and ai_results.get("short_summary") != "Summary not available":
                     model_used = "Gemini 1.5 Pro"
                     processing_method = ai_results.get("processing_method", "gemini_pro")
-                    print("✅" + "="*50)
                     print("✅ Gemini summarization successful!")
-                    print("✅" + "="*50)
                 else:
                     print("⚠️ Gemini returned incomplete results, falling back...")
                     ai_results = None
-                
             except Exception as e:
-                print(f"⚠️ Gemini failed with error: {e}")
-                print("🔄 Falling back to hierarchical summarizer...")
+                print(f"⚠️ Gemini failed: {e}")
                 ai_results = None
         
-        # Fallback to hierarchical/BART if Gemini not available or failed
         if ai_results is None:
             if HIERARCHICAL_AVAILABLE and hierarchical_summarizer and chunker:
-                print("📊" + "="*50)
                 print("📊 Using hierarchical summarizer (BART-based)...")
-                print("📊" + "="*50)
-                
                 update_progress(video_id, "analyzing", 65, "Chunking transcript for processing...")
-                
                 chunks = chunker.chunk_transcript(transcript_text)
                 print(f"✅ Created {len(chunks)} chunks")
-                
                 update_progress(video_id, "analyzing", 70, f"Processing {len(chunks)} content segments...")
-                
-                ai_results = hierarchical_summarizer.generate_hierarchical_summaries(
-                    chunks,
-                    duration_minutes=duration_minutes
-                )
+                ai_results = hierarchical_summarizer.generate_hierarchical_summaries(chunks, duration_minutes=duration_minutes)
                 model_used = ai_results.get("ai_model_used", "BART (Hierarchical)")
                 processing_method = ai_results.get("processing_method", "hierarchical")
                 print("✅ Hierarchical summarization complete")
-                
             else:
-                print("⚠️" + "="*50)
-                print("⚠️ Using dummy summarizer (no AI available)")
-                print("⚠️" + "="*50)
-                
+                print("⚠️ Using dummy summarizer")
                 update_progress(video_id, "analyzing", 75, "Using basic text analysis...")
-                
                 if chunker:
                     chunks = chunker.chunk_transcript(transcript_text)
                 else:
@@ -859,11 +770,7 @@ def summarize_video(
                     for i in range(0, len(words), chunk_size):
                         chunk_text = ' '.join(words[i:i+chunk_size])
                         chunks.append({'text': chunk_text, 'word_count': len(chunk_text.split())})
-                
-                ai_results = summarization_service.generate_hierarchical_summaries(
-                    chunks,
-                    duration_minutes=duration_minutes
-                )
+                ai_results = summarization_service.generate_hierarchical_summaries(chunks, duration_minutes=duration_minutes)
                 model_used = "Dummy Fallback"
                 processing_method = "dummy"
         
@@ -887,39 +794,31 @@ def summarize_video(
         
         saved_video_id = None
         
-        # Save to database if requested AND authenticated
         if req.save_to_history and is_authenticated:
             try:
                 update_progress(video_id, "saving", 90, "Saving to your history...")
-                
                 video_data = {
                     "owner_id": user_id,
-                    "url": normalized_url,  # Save normalized URL
+                    "url": normalized_url,
                     "video_id": video_id,
                     "title": title,
                     "duration_seconds": duration_sec,
                     "thumbnail_url": thumbnail,
                     "transcript_text": transcript_text,
-                    
                     "short_summary": ai_results.get("short_summary", ""),
                     "detailed_summary": ai_results.get("detailed_summary", ai_results.get("short_summary", "")),
-                    
                     "key_points": ai_results.get("key_points", []),
                     "key_points_with_timestamps": ai_results.get("key_points_with_timestamps", []),
-                    
                     "topics_covered": ai_results.get("topics_covered", []),
                     "recommendation": ai_results.get("recommendations", ["No recommendation"])[0] if ai_results.get("recommendations") else "",
                     "recommendations": ai_results.get("recommendations", []),
-                    
                     "section_summaries": ai_results.get("section_summaries", []),
                     "chunk_summaries": ai_results.get("chunk_summaries", []),
-                    
                     "ai_model_used": model_used,
                     "processing_method": processing_method,
                     "chunks_processed": ai_results.get("chunks_processed", 1),
                     "transcription_model": "Whisper",
                 }
-                
                 video = Video(**video_data)
                 session.add(video)
                 session.commit()
@@ -935,7 +834,6 @@ def summarize_video(
 
         update_progress(video_id, "complete", 100, "Complete! Your summary is ready.")
 
-        # Return results
         return {
             "title": title,
             "duration_minutes": round(duration_minutes, 2),
@@ -970,13 +868,12 @@ def summarize_video(
     except HTTPException:
         raise
     except Exception as e:
-        # On error, update progress with error
         try:
             video_id = extract_video_id(req.youtube_url.strip())
             update_progress(video_id, "error", 0, f"Error: {str(e)[:100]}")
         except:
             pass
-        print(f"❌ Unexpected error in summarize endpoint: {str(e)}")
+        print(f"❌ Unexpected error: {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
@@ -989,11 +886,9 @@ def get_user_history(
     current_user: User = Depends(get_current_user_required),
     session: Session = Depends(get_session),
 ):
-    """Get all videos summarized by the current user with all data"""
     try:
         statement = select(Video).where(Video.owner_id == current_user.id).order_by(Video.added_at.desc())
         videos = session.exec(statement).all()
-        
         history = []
         for video in videos:
             video_id_from_url = None
@@ -1001,7 +896,6 @@ def get_user_history(
                 video_id_from_url = extract_video_id(video.url)
             except:
                 pass
-                
             history.append({
                 "id": video.id,
                 "url": video.url,
@@ -1011,7 +905,6 @@ def get_user_history(
                 "duration_minutes": round(video.duration_seconds / 60, 2) if video.duration_seconds else None,
                 "thumbnail_url": video.thumbnail_url,
                 "added_at": video.added_at.isoformat() if video.added_at else None,
-                
                 "short_summary": video.short_summary,
                 "detailed_summary": video.detailed_summary,
                 "key_points": video.key_points or [],
@@ -1020,15 +913,12 @@ def get_user_history(
                 "recommendation": video.recommendation,
                 "recommendations": video.recommendations or [],
                 "section_summaries": video.section_summaries or [],
-                
                 "ai_model_used": video.ai_model_used,
                 "transcription_model": video.transcription_model,
                 "processing_method": video.processing_method,
                 "chunks_processed": video.chunks_processed,
-                
                 "video_id_from_url": video_id_from_url,
             })
-        
         return {
             "user_id": current_user.id,
             "total_videos": len(history),
@@ -1047,23 +937,19 @@ def get_video_details(
     current_user: User = Depends(get_current_user_required),
     session: Session = Depends(get_session),
 ):
-    """Get detailed information about a specific saved video"""
     try:
         statement = select(Video).where(
             (Video.id == video_id) & 
             (Video.owner_id == current_user.id)
         )
         video = session.exec(statement).first()
-        
         if not video:
             raise HTTPException(status_code=404, detail="VIDEO_NOT_FOUND")
-        
         video_id_from_url = None
         try:
             video_id_from_url = extract_video_id(video.url)
         except:
             pass
-        
         return {
             "id": video.id,
             "url": video.url,
@@ -1073,7 +959,6 @@ def get_video_details(
             "duration_minutes": round(video.duration_seconds / 60, 2) if video.duration_seconds else None,
             "thumbnail_url": video.thumbnail_url,
             "added_at": video.added_at.isoformat() if video.added_at else None,
-            
             "short_summary": video.short_summary,
             "detailed_summary": video.detailed_summary,
             "key_points": video.key_points or [],
@@ -1082,12 +967,10 @@ def get_video_details(
             "recommendation": video.recommendation,
             "recommendations": video.recommendations or [],
             "section_summaries": video.section_summaries or [],
-            
             "ai_model_used": video.ai_model_used,
             "transcription_model": video.transcription_model,
             "processing_method": video.processing_method,
             "chunks_processed": video.chunks_processed,
-            
             "transcript_text": video.transcript_text,
             "video_id_from_url": video_id_from_url,
         }
@@ -1106,23 +989,18 @@ def delete_video(
     current_user: User = Depends(get_current_user_required),
     session: Session = Depends(get_session),
 ):
-    """Delete a saved video from history"""
     try:
         from sqlmodel import delete
-        
         statement = select(Video).where(
             (Video.id == video_id) & 
             (Video.owner_id == current_user.id)
         )
         video = session.exec(statement).first()
-        
         if not video:
             raise HTTPException(status_code=404, detail="VIDEO_NOT_FOUND")
-        
         delete_statement = delete(Video).where(Video.id == video_id)
         session.exec(delete_statement)
         session.commit()
-        
         return {
             "message": "Video deleted successfully",
             "deleted_video_id": video_id
@@ -1136,7 +1014,6 @@ def delete_video(
 # ============================
 # FEEDBACK ENDPOINTS
 # ============================
-
 @app.post("/feedback/{video_id}")
 def submit_feedback(
     video_id: int,
@@ -1144,30 +1021,21 @@ def submit_feedback(
     current_user: User = Depends(get_current_user_required),
     session: Session = Depends(get_session),
 ):
-    """Submit or update feedback for a video"""
     from models import VideoFeedback
-    
-    # Validate rating
     if req.rating < 1 or req.rating > 5:
         raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
-    
-    # Check if video exists and belongs to user
     statement = select(Video).where(
         (Video.id == video_id) & (Video.owner_id == current_user.id)
     )
     video = session.exec(statement).first()
     if not video:
         raise HTTPException(status_code=404, detail="VIDEO_NOT_FOUND")
-    
-    # Check if feedback already exists
     statement = select(VideoFeedback).where(
         (VideoFeedback.user_id == current_user.id) & 
         (VideoFeedback.video_id == video_id)
     )
     existing = session.exec(statement).first()
-    
     if existing:
-        # Update existing feedback
         existing.rating = req.rating
         existing.comment = req.comment
         existing.updated_at = datetime.utcnow()
@@ -1184,7 +1052,6 @@ def submit_feedback(
             }
         }
     else:
-        # Create new feedback
         feedback = VideoFeedback(
             user_id=current_user.id,
             video_id=video_id,
@@ -1204,22 +1071,18 @@ def submit_feedback(
             }
         }
 
-
 @app.get("/feedback/{video_id}")
 def get_feedback_status(
     video_id: int,
     current_user: User = Depends(get_current_user_required),
     session: Session = Depends(get_session),
 ):
-    """Check if user has already given feedback for a video"""
     from models import VideoFeedback
-    
     statement = select(VideoFeedback).where(
         (VideoFeedback.user_id == current_user.id) & 
         (VideoFeedback.video_id == video_id)
     )
     existing = session.exec(statement).first()
-    
     if existing:
         return {
             "has_feedback": True,
@@ -1230,28 +1093,21 @@ def get_feedback_status(
     else:
         return {"has_feedback": False}
 
-
 @app.get("/video/{video_id}/feedbacks")
 def get_video_all_feedbacks(
     video_id: int,
     current_user: User = Depends(get_current_user_required),
     session: Session = Depends(get_session),
 ):
-    """Get all feedbacks for a video (for the video owner)"""
     from models import VideoFeedback
-    
-    # Check if video exists and belongs to user
     statement = select(Video).where(
         (Video.id == video_id) & (Video.owner_id == current_user.id)
     )
     video = session.exec(statement).first()
     if not video:
         raise HTTPException(status_code=404, detail="VIDEO_NOT_FOUND")
-    
-    # Get all feedbacks for this video
     statement = select(VideoFeedback).where(VideoFeedback.video_id == video_id).order_by(VideoFeedback.created_at.desc())
     feedbacks = session.exec(statement).all()
-    
     return {
         "video_id": video_id,
         "video_title": video.title,
@@ -1270,28 +1126,22 @@ def get_video_all_feedbacks(
         ]
     }
 
-
 @app.delete("/feedback/{feedback_id}")
 def delete_feedback(
     feedback_id: int,
     current_user: User = Depends(get_current_user_required),
     session: Session = Depends(get_session),
 ):
-    """Delete a user's own feedback"""
     from models import VideoFeedback
-    
     statement = select(VideoFeedback).where(
         (VideoFeedback.id == feedback_id) & 
         (VideoFeedback.user_id == current_user.id)
     )
     feedback = session.exec(statement).first()
-    
     if not feedback:
         raise HTTPException(status_code=404, detail="FEEDBACK_NOT_FOUND")
-    
     session.delete(feedback)
     session.commit()
-    
     return {"message": "Feedback deleted successfully"}
 
 # ============================
@@ -1330,14 +1180,12 @@ def root():
 # ============================
 @app.get("/health")
 def health_check():
-    """Health check endpoint"""
     try:
         try:
             whisper.load_model("base")
             whisper_status = "ready"
         except Exception as e:
             whisper_status = f"error: {str(e)}"
-            
         return {
             "status": "healthy",
             "whisper": whisper_status,
@@ -1356,15 +1204,12 @@ def health_check():
 # ============================
 @app.get("/test/ffmpeg")
 def test_ffmpeg():
-    """Test if FFmpeg is working"""
     try:
         result = subprocess.run(['ffmpeg', '-version'], 
                               capture_output=True, text=True, timeout=5)
-        
         if result.returncode == 0:
             lines = result.stdout.split('\n')
             version_line = lines[0] if lines else "Unknown"
-            
             return {
                 "status": "working",
                 "ffmpeg_version": version_line,
