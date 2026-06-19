@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional, List, Dict
 from dotenv import load_dotenv
 from urllib.parse import urlparse, parse_qs
+import browser_cookie3  # ADD THIS
 
 # Load environment variables from .env file
 load_dotenv()
@@ -32,7 +33,7 @@ from database import init_db, get_session
 from models import User, Video
 
 # ============================
-# PROGRESS TRACKING (ADDED FOR POLLING)
+# PROGRESS TRACKING
 # ============================
 progress_tracker: Dict[str, Dict] = {}
 
@@ -53,6 +54,50 @@ def get_progress(video_id: str) -> Dict:
         "progress": 0,
         "detail": "Starting video analysis..."
     })
+
+# ============================
+# GET COOKIES FUNCTION
+# ============================
+def get_youtube_cookies():
+    """Extract YouTube cookies from browser with multiple fallbacks"""
+    cookies_path = None
+    
+    # Try multiple browsers
+    browsers = [
+        ('chrome', browser_cookie3.chrome),
+        ('firefox', browser_cookie3.firefox),
+        ('edge', browser_cookie3.edge),
+        ('opera', browser_cookie3.opera),
+        ('brave', browser_cookie3.brave),
+    ]
+    
+    for browser_name, browser_func in browsers:
+        try:
+            print(f"🍪 Trying to get cookies from {browser_name}...")
+            cookies = browser_func(domain_name='.youtube.com')
+            
+            if cookies:
+                # Save cookies to file
+                cookies_path = os.path.join(tempfile.gettempdir(), f'youtube_cookies_{browser_name}.txt')
+                with open(cookies_path, 'w') as f:
+                    f.write('# Netscape HTTP Cookie File\n')
+                    for cookie in cookies:
+                        if cookie.domain.endswith('youtube.com') or cookie.domain.endswith('.youtube.com'):
+                            f.write(f"{cookie.domain}\tTRUE\t{cookie.path}\t{'TRUE' if cookie.secure else 'FALSE'}\t{cookie.expires if cookie.expires else 0}\t{cookie.name}\t{cookie.value}\n")
+                
+                print(f"✅ Successfully extracted cookies from {browser_name}")
+                return cookies_path
+        except Exception as e:
+            print(f"⚠️ Could not get cookies from {browser_name}: {e}")
+            continue
+    
+    # Fallback: Check if cookies.txt exists in project directory
+    if os.path.exists('cookies.txt'):
+        print("✅ Found cookies.txt file in project directory")
+        return 'cookies.txt'
+    
+    print("⚠️ No cookies found. Will try without cookies...")
+    return None
 
 # ============================
 # GEMINI SUMMARIZER WITH AUTO-ROTATE
@@ -173,7 +218,7 @@ def on_startup():
         print(f"⚠️ FFmpeg test failed: {e}")
 
 # ============================
-# URL NORMALIZATION FUNCTION (UPDATED FOR SHORTS)
+# URL NORMALIZATION FUNCTION
 # ============================
 def normalize_youtube_url(url: str) -> str:
     """Normalize YouTube URL by removing tracking parameters and standardizing format"""
@@ -192,7 +237,7 @@ def extract_video_id(url: str) -> str:
         video_id = url.split("watch?v=")[1].split("&")[0].split("?")[0]
         return video_id
     
-    # Handle youtube.com/shorts/ format (ADDED)
+    # Handle youtube.com/shorts/ format
     if "shorts/" in url:
         video_id = url.split("shorts/")[1].split("?")[0].split("&")[0]
         return video_id
@@ -252,7 +297,7 @@ class FeedbackRequest(BaseModel):
     comment: Optional[str] = None
 
 # ============================
-# AUTH DEPENDENCY WITH BETTER ERROR HANDLING
+# AUTH DEPENDENCY
 # ============================
 async def get_current_user_optional(
     token: Optional[str] = Depends(oauth2_scheme),
@@ -361,7 +406,7 @@ def me(current_user: User = Depends(get_current_user_required)):
     )
 
 # ============================
-# PROGRESS ENDPOINT (ADDED FOR POLLING)
+# PROGRESS ENDPOINT
 # ============================
 @app.get("/progress/{video_id}")
 def get_video_progress(video_id: str):
@@ -369,7 +414,7 @@ def get_video_progress(video_id: str):
     return get_progress(video_id)
 
 # ============================
-# YOUTUBE HELPERS (UPDATED REGEX FOR SHORTS)
+# YOUTUBE HELPERS - UPDATED WITH COOKIES
 # ============================
 
 YOUTUBE_REGEX = re.compile(
@@ -380,13 +425,37 @@ def is_valid_youtube_url(url: str) -> bool:
     return bool(YOUTUBE_REGEX.match(url))
 
 def get_video_metadata(url: str) -> dict:
+    """Get video metadata with cookies and proper headers"""
     try:
+        # Get cookies from browser
+        cookies_path = get_youtube_cookies()
+        
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
             'extract_flat': False,
             'no_color': True,
+            'cookiefile': cookies_path if cookies_path else None,
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-us,en;q=0.5',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'same-origin',
+                'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                'Sec-Ch-Ua-Mobile': '?0',
+                'Sec-Ch-Ua-Platform': '"Windows"',
+            },
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'web'],
+                    'skip': ['webpage', 'dash'],
+                    'player_skip': ['configs'],
+                }
+            }
         }
+        
+        print(f"🔍 Fetching metadata for: {url}")
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -399,6 +468,7 @@ def get_video_metadata(url: str) -> dict:
                 "view_count": info.get('view_count'),
                 "upload_date": info.get('upload_date'),
             }
+            print(f"✅ Metadata fetched: {metadata['title']}")
             return metadata
             
     except Exception as e:
@@ -413,7 +483,6 @@ def get_video_transcript(video_id: str) -> str:
             from youtube_transcript_api import YouTubeTranscriptApi
             
             print(f"📝 Attempting to fetch transcript directly for video: {video_id}")
-            # FIXED: Use the correct method - list_transcripts
             transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
             
             # Try to get English transcript
@@ -437,11 +506,14 @@ def get_video_transcript(video_id: str) -> str:
         except Exception as e:
             print(f"⚠️ Direct transcript fetch failed: {e}")
         
-        # If direct transcript fails, fall back to audio download
+        # If direct transcript fails, fall back to audio download with cookies
         with tempfile.TemporaryDirectory() as tmpdir:
             print(f"🔊 Downloading audio for video: {video_id}")
             
-            # Improved yt-dlp options to avoid 403 error
+            # Get cookies from browser
+            cookies_path = get_youtube_cookies()
+            
+            # Improved yt-dlp options with cookies
             ydl_opts = {
                 'format': 'bestaudio/best',
                 'outtmpl': os.path.join(tmpdir, 'audio.%(ext)s'),
@@ -457,21 +529,24 @@ def get_video_transcript(video_id: str) -> str:
                 'retries': 10,
                 'fragment_retries': 10,
                 'skip_unavailable_fragments': True,
-                
+                'cookiefile': cookies_path if cookies_path else None,
                 'http_headers': {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                     'Accept-Language': 'en-us,en;q=0.5',
                     'Sec-Fetch-Mode': 'navigate',
+                    'Sec-Fetch-Site': 'same-origin',
+                    'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                    'Sec-Ch-Ua-Mobile': '?0',
+                    'Sec-Ch-Ua-Platform': '"Windows"',
                 },
-                
                 'extractor_args': {
                     'youtube': {
                         'player_client': ['android', 'web'],
                         'skip': ['webpage', 'dash'],
+                        'player_skip': ['configs'],
                     }
                 },
-                
                 'socket_timeout': 30,
                 'verbose': False,
             }
@@ -501,11 +576,25 @@ def get_video_transcript(video_id: str) -> str:
                 print(f"🎵 Audio file: {os.path.basename(audio_path)}, Size: {os.path.getsize(audio_path) / 1024 / 1024:.2f} MB")
                 
             except Exception as e:
-                print(f"❌ Download failed: {str(e)[:200]}")
-                raise HTTPException(
-                    status_code=400, 
-                    detail="Could not download video audio. YouTube may be blocking the request. Please try again later or try a different video."
-                )
+                error_msg = str(e)
+                print(f"❌ Download failed: {error_msg[:200]}")
+                
+                # Check for specific errors
+                if "Sign in to confirm" in error_msg:
+                    raise HTTPException(
+                        status_code=400, 
+                        detail="YouTube is asking for verification. Please:\n1. Open Chrome and log into YouTube\n2. Then try again\nOr manually add cookies.txt file to the project"
+                    )
+                elif "This video is unavailable" in error_msg:
+                    raise HTTPException(
+                        status_code=400, 
+                        detail="Video is unavailable or private"
+                    )
+                else:
+                    raise HTTPException(
+                        status_code=400, 
+                        detail=f"Could not download video audio: {error_msg[:100]}"
+                    )
             
             # If we got here, we have an audio file
             if not audio_path:
@@ -577,7 +666,7 @@ def check_existing_video(session: Session, user_id: int, url: str) -> Optional[V
     return session.exec(statement).first()
 
 # ============================
-# SUMMARIZE WITH AI (WITH PROGRESS TRACKING)
+# SUMMARIZE WITH AI
 # ============================
 @app.post("/summarize")
 def summarize_video(
