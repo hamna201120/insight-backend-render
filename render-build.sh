@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
 set -o errexit
 
-echo "🚀 Installing build tools..."
-pip install --upgrade pip setuptools wheel
+pip install --upgrade pip
+pip install setuptools==69.5.1 wheel==0.42.0
 
-echo "📦 Installing requirements..."
 pip install -r requirements.txt --no-cache-dir
 
-echo "🎤 Pre-downloading Whisper model..."
-python -c "import whisper; whisper.load_model('tiny')"
-
-echo "✅ Build complete!"
+echo "Build complete"
