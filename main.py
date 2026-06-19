@@ -74,6 +74,7 @@ except Exception as e:
     print(f"⚠️ Gemini initialization failed: {e}")
     USE_GEMINI = False
     gemini_summarizer = None
+
 # ============================
 # HIERARCHICAL SUMMARIZER (FALLBACK)
 # ============================
@@ -409,10 +410,10 @@ def get_video_transcript(video_id: str) -> str:
     try:
         # Try to get transcript using youtube_transcript_api first (faster, no download)
         try:
-            from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
+            from youtube_transcript_api import YouTubeTranscriptApi
             
             print(f"📝 Attempting to fetch transcript directly for video: {video_id}")
-            # Fix: Use correct method name
+            # FIXED: Use the correct method - list_transcripts
             transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
             
             # Try to get English transcript
@@ -423,7 +424,8 @@ def get_video_transcript(video_id: str) -> str:
                     break
             
             if not transcript:
-                transcript = transcript_list[0]  # Take first available
+                # If no English transcript found, get the first available
+                transcript = next(iter(transcript_list))
             
             transcript_data = transcript.fetch()
             transcript_text = " ".join([item['text'] for item in transcript_data])
@@ -432,10 +434,6 @@ def get_video_transcript(video_id: str) -> str:
             
         except ImportError:
             print("⚠️ youtube_transcript_api not installed. Install with: pip install youtube-transcript-api")
-        except NoTranscriptFound:
-            print("⚠️ No transcript found for this video")
-        except TranscriptsDisabled:
-            print("⚠️ Transcripts are disabled for this video")
         except Exception as e:
             print(f"⚠️ Direct transcript fetch failed: {e}")
         
