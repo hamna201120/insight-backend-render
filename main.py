@@ -16,7 +16,17 @@ from pathlib import Path
 from typing import Optional, List, Dict
 from dotenv import load_dotenv
 from urllib.parse import urlparse, parse_qs
-import browser_cookie3  # ADD THIS
+
+# ============================================
+# CONDITIONAL IMPORT FOR BROWSER_COOKIE3
+# ============================================
+try:
+    import browser_cookie3
+    BROWSER_COOKIE_AVAILABLE = True
+    print("✅ browser-cookie3 available (local development)")
+except ImportError:
+    BROWSER_COOKIE_AVAILABLE = False
+    print("ℹ️ browser-cookie3 not available (normal on Render)")
 
 # Load environment variables from .env file
 load_dotenv()
@@ -56,45 +66,63 @@ def get_progress(video_id: str) -> Dict:
     })
 
 # ============================
-# GET COOKIES FUNCTION
+# GET COOKIES FUNCTION (UPDATED)
 # ============================
 def get_youtube_cookies():
     """Extract YouTube cookies from browser with multiple fallbacks"""
     cookies_path = None
     
-    # Try multiple browsers
-    browsers = [
-        ('chrome', browser_cookie3.chrome),
-        ('firefox', browser_cookie3.firefox),
-        ('edge', browser_cookie3.edge),
-        ('opera', browser_cookie3.opera),
-        ('brave', browser_cookie3.brave),
-    ]
-    
-    for browser_name, browser_func in browsers:
-        try:
-            print(f"🍪 Trying to get cookies from {browser_name}...")
-            cookies = browser_func(domain_name='.youtube.com')
-            
-            if cookies:
-                # Save cookies to file
-                cookies_path = os.path.join(tempfile.gettempdir(), f'youtube_cookies_{browser_name}.txt')
-                with open(cookies_path, 'w') as f:
-                    f.write('# Netscape HTTP Cookie File\n')
-                    for cookie in cookies:
-                        if cookie.domain.endswith('youtube.com') or cookie.domain.endswith('.youtube.com'):
-                            f.write(f"{cookie.domain}\tTRUE\t{cookie.path}\t{'TRUE' if cookie.secure else 'FALSE'}\t{cookie.expires if cookie.expires else 0}\t{cookie.name}\t{cookie.value}\n")
+    # Try browser cookies only if available (local development)
+    if BROWSER_COOKIE_AVAILABLE:
+        # Try multiple browsers
+        browsers = [
+            ('chrome', browser_cookie3.chrome),
+            ('firefox', browser_cookie3.firefox),
+            ('edge', browser_cookie3.edge),
+            ('opera', browser_cookie3.opera),
+            ('brave', browser_cookie3.brave),
+        ]
+        
+        for browser_name, browser_func in browsers:
+            try:
+                print(f"🍪 Trying to get cookies from {browser_name}...")
+                cookies = browser_func(domain_name='.youtube.com')
                 
-                print(f"✅ Successfully extracted cookies from {browser_name}")
-                return cookies_path
-        except Exception as e:
-            print(f"⚠️ Could not get cookies from {browser_name}: {e}")
-            continue
+                if cookies:
+                    # Save cookies to file
+                    cookies_path = os.path.join(tempfile.gettempdir(), f'youtube_cookies_{browser_name}.txt')
+                    with open(cookies_path, 'w') as f:
+                        f.write('# Netscape HTTP Cookie File\n')
+                        for cookie in cookies:
+                            if cookie.domain.endswith('youtube.com') or cookie.domain.endswith('.youtube.com'):
+                                f.write(f"{cookie.domain}\tTRUE\t{cookie.path}\t{'TRUE' if cookie.secure else 'FALSE'}\t{cookie.expires if cookie.expires else 0}\t{cookie.name}\t{cookie.value}\n")
+                    
+                    print(f"✅ Successfully extracted cookies from {browser_name}")
+                    return cookies_path
+            except Exception as e:
+                print(f"⚠️ Could not get cookies from {browser_name}: {e}")
+                continue
+    else:
+        print("ℹ️ browser-cookie3 not available, skipping browser cookie extraction")
     
     # Fallback: Check if cookies.txt exists in project directory
     if os.path.exists('cookies.txt'):
         print("✅ Found cookies.txt file in project directory")
         return 'cookies.txt'
+    
+    # Try to get cookies from environment variable (for Render)
+    cookies_b64 = os.environ.get('YOUTUBE_COOKIES_B64')
+    if cookies_b64:
+        try:
+            import base64
+            cookies_content = base64.b64decode(cookies_b64).decode('utf-8')
+            cookies_path = os.path.join(tempfile.gettempdir(), 'youtube_cookies_env.txt')
+            with open(cookies_path, 'w') as f:
+                f.write(cookies_content)
+            print("✅ Loaded cookies from environment variable")
+            return cookies_path
+        except Exception as e:
+            print(f"⚠️ Failed to load cookies from env: {e}")
     
     print("⚠️ No cookies found. Will try without cookies...")
     return None
@@ -583,7 +611,7 @@ def get_video_transcript(video_id: str) -> str:
                 if "Sign in to confirm" in error_msg:
                     raise HTTPException(
                         status_code=400, 
-                        detail="YouTube is asking for verification. Please:\n1. Open Chrome and log into YouTube\n2. Then try again\nOr manually add cookies.txt file to the project"
+                        detail="YouTube is asking for verification. Please add cookies.txt to your project or set YOUTUBE_COOKIES_B64 environment variable"
                     )
                 elif "This video is unavailable" in error_msg:
                     raise HTTPException(
