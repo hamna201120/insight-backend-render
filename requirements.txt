@@ -1,38 +1,37 @@
 # ⚠️ CRITICAL: Build tools MUST be first!
-setuptools==69.5.1
-wheel==0.42.0
+setuptools
+wheel
 
 # FastAPI & Database
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-sqlmodel==0.0.14
-sqlalchemy==2.0.23
+fastapi
+uvicorn[standard]
+sqlmodel
+sqlalchemy
 passlib[argon2]
 argon2-cffi
-yt-dlp>=2024.4.9
 
 # Authentication
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-python-multipart==0.0.6
+python-jose[cryptography]
+passlib[bcrypt]
+python-multipart
 
-# ⭐ WHISPER
+# ⭐ WHISPER & AUDIO
 git+https://github.com/openai/whisper.git
-yt-dlp==2023.11.14
-ffmpeg-python==0.2.0
-youtube-transcript-api==0.6.1
-tiktoken==0.5.2
-regex==2023.12.25
-numba==0.58.1
+yt-dlp
+ffmpeg-python
+youtube-transcript-api
+tiktoken
+regex
+numba
 
-# ⭐ PyTorch (CPU)
+# ⭐ PyTorch (CPU) - Using a widely compatible version
 torch==2.0.1
 
 # ⭐ GEMINI API
 google-genai
 
 # CORS & Environment
-python-dotenv==1.0.0
+python-dotenv
 
 # Utilities
-numpy>=1.21.0
+numpy
