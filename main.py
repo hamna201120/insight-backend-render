@@ -411,7 +411,7 @@ def get_video_progress(video_id: str):
     return get_progress(video_id)
 
 # ============================
-# YOUTUBE HELPERS - FIXED
+# YOUTUBE HELPERS - FULLY FIXED
 # ============================
 YOUTUBE_REGEX = re.compile(
     r"(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)[\w\-]+"
@@ -421,10 +421,11 @@ def is_valid_youtube_url(url: str) -> bool:
     return bool(YOUTUBE_REGEX.match(url))
 
 def get_video_metadata(url: str) -> dict:
+    """Get video metadata - FIXED: No format selection"""
     try:
         cookies_path = get_youtube_cookies()
         
-        # FIX: Use updated yt-dlp options with better format selection
+        # FIXED: Removed format selection completely
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
@@ -438,8 +439,7 @@ def get_video_metadata(url: str) -> dict:
             },
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android', 'web'],  # Try android first
-                    'skip': ['hls', 'dash'],  # Skip problematic formats
+                    'player_client': ['android', 'web'],
                 }
             }
         }
@@ -465,7 +465,7 @@ def get_video_metadata(url: str) -> dict:
         raise HTTPException(status_code=400, detail=f"VIDEO_METADATA_FAILED: {str(e)}")
 
 def get_video_transcript(video_id: str) -> str:
-    """Extract audio from YouTube video and transcribe using Whisper"""
+    """Extract audio from YouTube video - FIXED: Auto format selection with retry"""
     try:
         # Try transcript API first
         try:
@@ -491,26 +491,26 @@ def get_video_transcript(video_id: str) -> str:
         except Exception as e:
             print(f"⚠️ Direct transcript fetch failed: {e}")
         
-        # Fallback: Download audio with FIXED options
+        # Fallback: Download audio with AUTO format selection
         with tempfile.TemporaryDirectory() as tmpdir:
             print(f"🔊 Downloading audio for video: {video_id}")
             
             cookies_path = get_youtube_cookies()
             
-            # FIX: Use best format with better fallback
+            # FIXED: Let yt-dlp choose the best available format automatically
             ydl_opts = {
-                'format': 'bestaudio[ext=m4a]/bestaudio[ext=aac]/bestaudio[ext=webm]/bestaudio/best',  # Try multiple formats
+                'format': 'bestaudio/best',  # AUTO SELECT - This is the key fix!
                 'outtmpl': os.path.join(tmpdir, 'audio.%(ext)s'),
                 'quiet': False,
                 'no_warnings': False,
                 'postprocessors': [{
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': 'mp3',
-                    'preferredquality': '128',  # Lower quality = faster download
+                    'preferredquality': '128',
                 }],
                 'extract_audio': True,
                 'audio_format': 'mp3',
-                'retries': 20,  # More retries
+                'retries': 20,
                 'fragment_retries': 20,
                 'skip_unavailable_fragments': True,
                 'cookiefile': cookies_path if cookies_path else None,
@@ -521,13 +521,13 @@ def get_video_transcript(video_id: str) -> str:
                 },
                 'extractor_args': {
                     'youtube': {
-                        'player_client': ['android', 'web'],  # Try android first
-                        'skip': ['hls', 'dash'],  # Skip problematic formats
+                        'player_client': ['android', 'web'],
+                        'skip': ['hls', 'dash'],
                     }
                 },
-                'socket_timeout': 60,  # Longer timeout
+                'socket_timeout': 60,
                 'verbose': False,
-                'concurrent_fragment_downloads': 1,  # Slower but more reliable
+                'concurrent_fragment_downloads': 1,
             }
             
             video_url = f"https://www.youtube.com/watch?v={video_id}"
@@ -557,15 +557,26 @@ def get_video_transcript(video_id: str) -> str:
                 error_msg = str(e)
                 print(f"❌ Download failed: {error_msg[:200]}")
                 
-                if "Sign in to confirm" in error_msg:
+                # RETRY with different format if first attempt fails
+                if "Requested format is not available" in error_msg or "format" in error_msg.lower():
+                    print("🔄 Retrying with alternative format selection...")
+                    ydl_opts['format'] = 'bestaudio[ext=m4a]/bestaudio[ext=aac]/bestaudio[ext=webm]/bestaudio/best'
+                    try:
+                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                            info = ydl.extract_info(video_url, download=True)
+                            audio_files = list(Path(tmpdir).glob("*.mp3")) or list(Path(tmpdir).glob("*.m4a")) or list(Path(tmpdir).glob("*.aac"))
+                            if audio_files:
+                                audio_path = str(audio_files[0])
+                                print(f"✅ Retry successful: {os.path.basename(audio_path)}")
+                    except Exception as e2:
+                        raise HTTPException(
+                            status_code=400, 
+                            detail=f"Could not download audio. Try a different video or update cookies."
+                        )
+                elif "Sign in to confirm" in error_msg:
                     raise HTTPException(
                         status_code=400, 
                         detail="YouTube requires verification. Please set YOUTUBE_COOKIES_B64 environment variable with valid cookies"
-                    )
-                elif "403" in error_msg:
-                    raise HTTPException(
-                        status_code=400, 
-                        detail="YouTube is blocking the request. Try:\n1. Update cookies\n2. Try a different video\n3. Wait a few minutes"
                     )
                 else:
                     raise HTTPException(
