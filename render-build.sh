@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -o errexit
-pip install --upgrade pip
+
 echo "🚀 Installing build tools..."
 pip install --upgrade pip setuptools wheel
 
