@@ -986,6 +986,21 @@ def debug():
         "cookies_present": bool(os.environ.get("YOUTUBE_COOKIES_B64"))
     }
 
+@app.get("/check-cookies")
+def check_cookies():
+    path = get_youtube_cookies()
+
+    if not path:
+        return {"status": "no_cookie_file"}
+
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        first_lines = f.readlines()[:10]
+
+    return {
+        "path": path,
+        "lines": first_lines
+    }
+
 # ============================
 # ROOT
 # ============================
