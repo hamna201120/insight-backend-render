@@ -331,23 +331,42 @@ def is_valid_youtube_url(url: str) -> bool:
 
 def get_video_metadata(url: str) -> dict:
     try:
-        yt = YouTube(url)
-
-        return {
-            "title": yt.title,
-            "duration": yt.length,
-            "thumbnail": yt.thumbnail_url,
-            "uploader": yt.author,
-            "view_count": yt.views,
-            "upload_date": None,
+        # Use the safest metadata options
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "extract_flat": False,
+            "nocheckcertificate": True,
+            "no_color": True,
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android"]
+                }
+            }
         }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            
+            return {
+                "title": info.get('title', 'Unknown Title'),
+                "duration": info.get('duration', 0),
+                "thumbnail": info.get('thumbnail', ''),
+                "uploader": info.get('uploader', 'Unknown'),
+                "view_count": info.get('view_count', 0),
+                "upload_date": info.get('upload_date', None),
+            }
 
     except Exception as e:
-        print(f"❌ Video metadata error: {e}")
+        import traceback
+        print("========== FULL ERROR ==========")
+        traceback.print_exc()
+        print("================================")
         raise HTTPException(
             status_code=400,
             detail=f"VIDEO_METADATA_FAILED: {str(e)}"
         )
+
 # ============================
 # YOUTUBE TRANSCRIPT - PERMANENT FIX
 # ============================
@@ -955,6 +974,17 @@ def delete_feedback(
     session.delete(feedback)
     session.commit()
     return {"message": "Feedback deleted successfully"}
+
+# ============================
+# DEBUG ENDPOINT
+# ============================
+@app.get("/debug")
+def debug():
+    import yt_dlp
+    return {
+        "yt_dlp_version": yt_dlp.version.__version__,
+        "cookies_present": bool(os.environ.get("YOUTUBE_COOKIES_B64"))
+    }
 
 # ============================
 # ROOT
