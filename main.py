@@ -84,7 +84,7 @@ def get_youtube_cookies_enhanced():
         except Exception as e:
             print(f"⚠️ Failed to load cookies from env: {e}")
     
-    # Strategy 2: Try all browsers (Chrome, Firefox, Edge, Opera, Brave)
+    # Strategy 2: Try all browsers
     if BROWSER_COOKIE_AVAILABLE:
         browsers = [
             ('chrome', browser_cookie3.chrome),
@@ -134,50 +134,41 @@ def get_youtube_cookies():
     return get_youtube_cookies_enhanced()
 
 # ============================
-# DOWNLOAD AUDIO WITH FALLBACKS
+# DOWNLOAD AUDIO WITH FALLBACKS - FIXED
 # ============================
 def download_audio_with_fallbacks(video_id: str, tmpdir: str) -> str:
-    """Download audio with multiple fallback strategies"""
+    """Download audio with multiple fallback strategies - FIXED for PO Token"""
     
     video_url = f"https://www.youtube.com/watch?v={video_id}"
     cookies_path = get_youtube_cookies_enhanced()
     
-    # Strategy 1: Best audio with cookies
+    # Strategy 1: Use mweb client with cookies (most reliable)
     strategies = [
-        # Strategy 1: Best audio with cookies
+        # Strategy 1: mweb client (recommended for PO Token issues)
         {
             'outtmpl': os.path.join(tmpdir, 'audio.%(ext)s'),
-            'format': 'bestaudio/best',
+            'format': 'bestaudio[ext=m4a]/bestaudio',
             'cookiefile': cookies_path if cookies_path else None,
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android'],
+                    'player_client': ['mweb'],  # mweb client works better
+                    'skip': ['dash', 'hls'],  # Skip DASH/HLS formats
                 }
             }
         },
-        # Strategy 2: Try with different client
+        # Strategy 2: web client with cookies
         {
             'outtmpl': os.path.join(tmpdir, 'audio.%(ext)s'),
-            'format': 'bestaudio/best',
+            'format': 'bestaudio[ext=m4a]/bestaudio',
             'cookiefile': cookies_path if cookies_path else None,
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['ios'],
-                }
-            }
-        },
-        # Strategy 3: Try with no cookies but different headers
-        {
-            'outtmpl': os.path.join(tmpdir, 'audio.%(ext)s'),
-            'format': 'bestaudio/best',
-            'cookiefile': None,
             'extractor_args': {
                 'youtube': {
                     'player_client': ['web'],
+                    'skip': ['dash', 'hls'],
                 }
             }
         },
-        # Strategy 4: Try with m4a format
+        # Strategy 3: android client
         {
             'outtmpl': os.path.join(tmpdir, 'audio.%(ext)s'),
             'format': 'bestaudio[ext=m4a]/bestaudio',
@@ -185,17 +176,31 @@ def download_audio_with_fallbacks(video_id: str, tmpdir: str) -> str:
             'extractor_args': {
                 'youtube': {
                     'player_client': ['android'],
+                    'skip': ['dash', 'hls'],
                 }
             }
         },
-        # Strategy 5: Try with webm format
+        # Strategy 4: No cookies, mweb client
         {
             'outtmpl': os.path.join(tmpdir, 'audio.%(ext)s'),
-            'format': 'bestaudio[ext=webm]/bestaudio',
+            'format': 'bestaudio[ext=m4a]/bestaudio',
+            'cookiefile': None,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['mweb'],
+                    'skip': ['dash', 'hls'],
+                }
+            }
+        },
+        # Strategy 5: Try with bestaudio (no format restriction)
+        {
+            'outtmpl': os.path.join(tmpdir, 'audio.%(ext)s'),
+            'format': 'bestaudio',
             'cookiefile': cookies_path if cookies_path else None,
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android'],
+                    'player_client': ['mweb'],
+                    'skip': ['dash', 'hls'],
                 }
             }
         }
@@ -209,6 +214,9 @@ def download_audio_with_fallbacks(video_id: str, tmpdir: str) -> str:
                 'no_warnings': True,
                 'no_color': True,
                 'nocheckcertificate': True,
+                'ignoreerrors': True,
+                'sleep_interval': 5,  # Add delay to avoid rate limiting
+                'max_sleep_interval': 10,
                 'http_headers': {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -221,11 +229,11 @@ def download_audio_with_fallbacks(video_id: str, tmpdir: str) -> str:
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(video_url, download=True)
-                print(f"✅ Strategy {i} succeeded!")
+                print(f"✅ Strategy {i} succeeded! Title: {info.get('title', 'Unknown')}")
                 
                 # Find downloaded file
                 all_files = list(Path(tmpdir).glob("*"))
-                audio_extensions = ['.mp3', '.m4a', '.webm', '.opus', '.aac', '.wav']
+                audio_extensions = ['.mp3', '.m4a', '.webm', '.opus', '.aac', '.wav', '.m4b']
                 audio_files = [f for f in all_files if f.suffix in audio_extensions]
                 
                 if not audio_files:
@@ -235,25 +243,27 @@ def download_audio_with_fallbacks(video_id: str, tmpdir: str) -> str:
                     return str(audio_files[0])
                 
         except Exception as e:
-            print(f"⚠️ Strategy {i} failed: {str(e)[:100]}")
+            print(f"⚠️ Strategy {i} failed: {str(e)[:150]}")
             continue
     
-    # Strategy 6: Last resort - try with yt-dlp's built-in cookie extraction
+    # Strategy 6: Last resort - try with subprocess
     try:
-        print("🎯 Trying last resort strategy with --cookies-from-browser...")
+        print("🎯 Trying last resort strategy with subprocess...")
         import subprocess
         cmd = [
             'yt-dlp',
             '--cookies-from-browser', 'chrome',
-            '-f', 'bestaudio',
+            '-f', 'bestaudio[ext=m4a]/bestaudio',
             '-o', os.path.join(tmpdir, 'audio.%(ext)s'),
             video_url,
-            '--quiet'
+            '--quiet',
+            '--extractor-args', 'youtube:player_client=mweb',
+            '--extractor-args', 'youtube:skip=dash,hls'
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode == 0:
             all_files = list(Path(tmpdir).glob("*"))
-            audio_extensions = ['.mp3', '.m4a', '.webm', '.opus', '.aac', '.wav']
+            audio_extensions = ['.mp3', '.m4a', '.webm', '.opus', '.aac', '.wav', '.m4b']
             audio_files = [f for f in all_files if f.suffix in audio_extensions]
             if audio_files:
                 return str(audio_files[0])
@@ -477,7 +487,7 @@ def get_video_progress(video_id: str):
     return get_progress(video_id)
 
 # ============================
-# YOUTUBE METADATA - ENHANCED
+# YOUTUBE METADATA - FIXED
 # ============================
 YOUTUBE_REGEX = re.compile(
     r"(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)[\w\-]+"
@@ -487,10 +497,11 @@ def is_valid_youtube_url(url: str) -> bool:
     return bool(YOUTUBE_REGEX.match(url))
 
 def get_video_metadata(url: str) -> dict:
-    """Get video metadata with enhanced cookie handling"""
+    """Get video metadata with enhanced cookie handling - FIXED"""
     try:
         cookies_path = get_youtube_cookies_enhanced()
         
+        # Use mweb client for metadata too
         ydl_opts = {
             "quiet": True,
             "no_warnings": True,
@@ -498,9 +509,12 @@ def get_video_metadata(url: str) -> dict:
             "nocheckcertificate": True,
             "no_color": True,
             "cookiefile": cookies_path if cookies_path else None,
+            "sleep_interval": 5,
+            "max_sleep_interval": 10,
             "extractor_args": {
                 "youtube": {
-                    "player_client": ["android", "ios"],  # Try multiple clients
+                    "player_client": ["mweb", "web", "android"],  # Try multiple
+                    "skip": ["dash", "hls"],
                 }
             }
         }
@@ -523,18 +537,20 @@ def get_video_metadata(url: str) -> dict:
         traceback.print_exc()
         print("================================")
         
-        # Try one more time with different settings
+        # Try one more time with flat extraction
         try:
-            print("🔄 Retrying metadata with different settings...")
+            print("🔄 Retrying metadata with flat extraction...")
             ydl_opts = {
                 "quiet": True,
                 "no_warnings": True,
-                "extract_flat": True,  # Flat extraction might work
+                "extract_flat": True,
                 "nocheckcertificate": True,
                 "no_color": True,
+                "cookiefile": get_youtube_cookies_enhanced() if get_youtube_cookies_enhanced() else None,
                 "extractor_args": {
                     "youtube": {
-                        "player_client": ["web"],
+                        "player_client": ["mweb"],
+                        "skip": ["dash", "hls"],
                     }
                 }
             }
@@ -548,17 +564,17 @@ def get_video_metadata(url: str) -> dict:
                     "view_count": info.get('view_count', 0),
                     "upload_date": info.get('upload_date', None),
                 }
-        except:
+        except Exception as e2:
             raise HTTPException(
                 status_code=400,
                 detail=f"VIDEO_METADATA_FAILED: {str(e)}"
             )
 
 # ============================
-# YOUTUBE TRANSCRIPT - ENHANCED
+# YOUTUBE TRANSCRIPT - FIXED
 # ============================
 def get_video_transcript(video_id: str) -> str:
-    """Extract audio with enhanced fallback strategies"""
+    """Extract audio with enhanced fallback strategies - FIXED"""
     try:
         # Try transcript API first
         try:
@@ -1128,18 +1144,16 @@ def delete_feedback(
     return {"message": "Feedback deleted successfully"}
 
 # ============================
-# COOKIE EXPORT HELPER (for production)
+# COOKIE EXPORT HELPER
 # ============================
 def export_cookies_for_production():
     """Helper to export cookies for production"""
     import base64
     
     try:
-        # Try to get cookies from Chrome
         if BROWSER_COOKIE_AVAILABLE:
             cookies = browser_cookie3.chrome(domain_name='.youtube.com')
             if cookies:
-                # Format as Netscape cookie file
                 cookie_lines = ["# Netscape HTTP Cookie File"]
                 for cookie in cookies:
                     if 'youtube.com' in cookie.domain:
@@ -1150,7 +1164,6 @@ def export_cookies_for_production():
                         )
                 
                 cookie_content = "\n".join(cookie_lines)
-                # Encode to base64 for environment variable
                 cookie_b64 = base64.b64encode(cookie_content.encode()).decode()
                 print("✅ Generated cookie base64. Add this to YOUTUBE_COOKIES_B64 environment variable:")
                 print("="*50)
