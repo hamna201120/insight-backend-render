@@ -15,7 +15,7 @@ import gc
 from pathlib import Path
 from typing import Optional, List, Dict
 from dotenv import load_dotenv
-
+from pytube import YouTube
 # ============================================
 # CONDITIONAL IMPORT FOR BROWSER_COOKIE3
 # ============================================
@@ -330,38 +330,24 @@ def is_valid_youtube_url(url: str) -> bool:
     return bool(YOUTUBE_REGEX.match(url))
 
 def get_video_metadata(url: str) -> dict:
-    """Get video metadata - SIMPLEST POSSIBLE"""
     try:
-        cookies_path = get_youtube_cookies()
-        
-        # NO FORMAT SPECIFICATION - let yt-dlp use default
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'no_color': True,
-            'cookiefile': cookies_path if cookies_path else None,
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            }
+        yt = YouTube(url)
+
+        return {
+            "title": yt.title,
+            "duration": yt.length,
+            "thumbnail": yt.thumbnail_url,
+            "uploader": yt.author,
+            "view_count": yt.views,
+            "upload_date": None,
         }
-        
-        print(f"🔍 Fetching metadata for: {url}")
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            
-            return {
-                "title": info.get('title', 'Untitled Video'),
-                "duration": info.get('duration', 0),
-                "thumbnail": info.get('thumbnail'),
-                "uploader": info.get('uploader'),
-                "view_count": info.get('view_count'),
-                "upload_date": info.get('upload_date'),
-            }
-            
+
     except Exception as e:
         print(f"❌ Video metadata error: {e}")
-        raise HTTPException(status_code=400, detail=f"VIDEO_METADATA_FAILED: {str(e)}")
-
+        raise HTTPException(
+            status_code=400,
+            detail=f"VIDEO_METADATA_FAILED: {str(e)}"
+        )
 # ============================
 # YOUTUBE TRANSCRIPT - PERMANENT FIX
 # ============================
