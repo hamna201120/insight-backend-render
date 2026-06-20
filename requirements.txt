@@ -23,7 +23,7 @@ youtube-transcript-api
 tiktoken
 regex
 numba
-
+pytube==15.0.0
 # ⭐ PyTorch (CPU) - Using a widely compatible version
 torch==2.0.1
 
