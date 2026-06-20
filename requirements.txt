@@ -17,7 +17,7 @@ python-multipart
 
 # ⭐ WHISPER & AUDIO
 git+https://github.com/openai/whisper.git
-yt-dlp>=2025.01.01  # Or just 'yt-dlp' to grab the latest available during build
+yt-dlp>=2025.06.30  # Or just 'yt-dlp' to grab the latest available during build
 ffmpeg-python
 youtube-transcript-api
 tiktoken
