@@ -134,17 +134,17 @@ def get_youtube_cookies():
     return get_youtube_cookies_enhanced()
 
 # ============================
-# DOWNLOAD AUDIO WITH FALLBACKS - CRITICAL FIX
+# DOWNLOAD AUDIO WITH FALLBACKS - REAL FIX
 # ============================
 def download_audio_with_fallbacks(video_id: str, tmpdir: str) -> str:
-    """Download audio - STOP on first success"""
+    """Download audio - CORRECTLY FIND THE DOWNLOADED FILE"""
     
     video_url = f"https://www.youtube.com/watch?v={video_id}"
     cookies_path = get_youtube_cookies_enhanced()
     
-    # Strategies - ORDERED BY RELIABILITY
+    # Strategies - each uses a fixed base filename to find easily
     strategies = [
-        # Strategy 1: mweb client with process=False (MOST RELIABLE)
+        # Strategy 1: mweb client (most reliable)
         {
             'outtmpl': os.path.join(tmpdir, 'audio.%(ext)s'),
             'cookiefile': cookies_path if cookies_path else None,
@@ -154,7 +154,7 @@ def download_audio_with_fallbacks(video_id: str, tmpdir: str) -> str:
                 }
             },
         },
-        # Strategy 2: mweb with format specified
+        # Strategy 2: mweb with format m4a
         {
             'outtmpl': os.path.join(tmpdir, 'audio.%(ext)s'),
             'format': 'bestaudio[ext=m4a]',
@@ -222,20 +222,26 @@ def download_audio_with_fallbacks(video_id: str, tmpdir: str) -> str:
                 info = ydl.extract_info(video_url, download=True, process=False)
                 print(f"✅ Strategy {i} succeeded! Title: {info.get('title', 'Unknown')}")
                 
-                # Find downloaded file
+                # Find the downloaded file - approach: look for any file in tmpdir
+                # that is not a temporary file and has size > 0
                 all_files = list(Path(tmpdir).glob("*"))
-                audio_extensions = ['.mp3', '.m4a', '.webm', '.opus', '.aac', '.wav', '.m4b']
-                audio_files = [f for f in all_files if f.suffix in audio_extensions]
+                print(f"📁 Files in tmpdir: {[f.name for f in all_files]}")
                 
+                # Filter audio extensions
+                audio_extensions = ['.mp3', '.m4a', '.webm', '.opus', '.aac', '.wav', '.m4b', '.mp4', '.mkv']
+                audio_files = [f for f in all_files if f.suffix.lower() in audio_extensions]
+                
+                # If none found, take any file that is not a directory and has size > 0
                 if not audio_files:
-                    audio_files = all_files
+                    audio_files = [f for f in all_files if f.is_file() and f.stat().st_size > 0]
                 
                 if audio_files:
+                    # Take the first one (or the largest)
                     audio_path = str(audio_files[0])
-                    print(f"🎵 Audio downloaded: {os.path.basename(audio_path)}")
-                    return audio_path  # CRITICAL: Return immediately on success
+                    print(f"🎵 Found audio file: {os.path.basename(audio_path)} (size: {audio_files[0].stat().st_size} bytes)")
+                    return audio_path  # Success!
                 else:
-                    print(f"⚠️ No audio file found after strategy {i}")
+                    print(f"⚠️ No valid file found after strategy {i}")
                     continue
                 
         except Exception as e:
@@ -243,7 +249,7 @@ def download_audio_with_fallbacks(video_id: str, tmpdir: str) -> str:
             continue
     
     # If we get here, all strategies failed
-    raise Exception("All audio download strategies failed")
+    raise Exception("All audio download strategies failed - no audio file produced")
 
 # ============================
 # GEMINI SUMMARIZER
@@ -520,12 +526,23 @@ def get_video_metadata(url: str) -> dict:
 def get_video_transcript(video_id: str) -> str:
     """Extract audio with enhanced fallback strategies"""
     try:
-        # Try transcript API first
+        # Try transcript API first (fix for newer versions)
         try:
             from youtube_transcript_api import YouTubeTranscriptApi
             print(f"📝 Trying direct transcript for: {video_id}")
-            # Fix: Use correct method for newer versions
-            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+            # Use correct method for all versions
+            try:
+                transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+            except AttributeError:
+                # Fallback for older versions
+                transcript_list = YouTubeTranscriptApi.get_transcripts(video_id, languages=['en'])
+                if transcript_list:
+                    transcript_text = " ".join([item['text'] for item in transcript_list[0]])
+                    print(f"✅ Direct transcript fetched (old API)")
+                    return transcript_text
+                else:
+                    raise Exception("No transcript found")
+            
             transcript = None
             for t in transcript_list:
                 if t.language_code.startswith('en'):
