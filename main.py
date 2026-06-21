@@ -8,14 +8,14 @@ from jose import JWTError, jwt
 import re
 import subprocess
 import whisper
-import yt_dlp
 import tempfile
 import os
 import gc
+import requests
 from pathlib import Path
 from typing import Optional, List, Dict
 from dotenv import load_dotenv
-from pytube import YouTube
+
 # ============================================
 # CONDITIONAL IMPORT FOR BROWSER_COOKIE3
 # ============================================
@@ -129,127 +129,111 @@ def get_youtube_cookies_enhanced():
     print("⚠️ No valid cookies found - YouTube will likely block")
     return None
 
-# Keep original function for backward compatibility
 def get_youtube_cookies():
     return get_youtube_cookies_enhanced()
 
 # ============================
-# DOWNLOAD AUDIO WITH FALLBACKS - THE FIX
+# AUDIO DOWNLOAD - USING SUBPROCESS (RELIABLE)
 # ============================
-def download_audio_with_fallbacks(video_id: str, tmpdir: str) -> str:
-    """Download audio using ydl.download() - guaranteed to produce a file"""
-    
+def download_audio_with_subprocess(video_id: str, tmpdir: str) -> str:
+    """Download audio using subprocess with explicit format to avoid format listing"""
     video_url = f"https://www.youtube.com/watch?v={video_id}"
     cookies_path = get_youtube_cookies_enhanced()
     
-    # Strategies - each uses the same outtmpl
-    strategies = [
-        # Strategy 1: mweb client (most reliable)
-        {
-            'cookiefile': cookies_path if cookies_path else None,
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['mweb'],
-                }
-            },
-        },
-        # Strategy 2: mweb with format m4a
-        {
-            'format': 'bestaudio[ext=m4a]',
-            'cookiefile': cookies_path if cookies_path else None,
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['mweb'],
-                }
-            },
-        },
-        # Strategy 3: web client
-        {
-            'cookiefile': cookies_path if cookies_path else None,
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['web'],
-                }
-            },
-        },
-        # Strategy 4: android client
-        {
-            'cookiefile': cookies_path if cookies_path else None,
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android'],
-                }
-            },
-        },
-        # Strategy 5: No cookies (last resort)
-        {
-            'cookiefile': None,
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['mweb'],
-                }
-            },
-        }
-    ]
+    # Format IDs that are known to work without listing all formats
+    format_ids = ['140', '251', 'bestaudio']
+    # Clients that work with these formats
+    clients = ['mweb', 'android', 'web']
     
-    for i, extra_opts in enumerate(strategies, 1):
+    # Build a list of strategies: (format, client, cookie)
+    strategies = []
+    for fmt in format_ids:
+        for client in clients:
+            # With cookies
+            strategies.append((fmt, client, cookies_path))
+            # Without cookies (fallback)
+            strategies.append((fmt, client, None))
+    
+    # Add a special strategy: use --get-url and download via requests
+    strategies.append(('get_url', None, cookies_path))  # special marker
+    
+    for idx, (fmt, client, cookie) in enumerate(strategies, 1):
         try:
-            print(f"🎯 Trying strategy {i}...")
+            print(f"🎯 Trying strategy {idx}: format={fmt}, client={client}, cookie={bool(cookie)}")
             
-            ydl_opts = {
-                'quiet': True,
-                'no_warnings': True,
-                'no_color': True,
-                'nocheckcertificate': True,
-                'ignoreerrors': True,
-                'sleep_interval': 3,
-                'max_sleep_interval': 6,
-                'outtmpl': os.path.join(tmpdir, 'audio.%(ext)s'),  # fixed base name
-                'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                    'Accept-Language': 'en-US,en;q=0.5',
-                },
-                **extra_opts
-            }
-            
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # Use download() method - it respects outtmpl and always downloads
-                ydl.download([video_url])
+            if fmt == 'get_url':
+                # Use subprocess to get direct audio URL
+                cmd = [
+                    'yt-dlp',
+                    '--get-url',
+                    '--format', '140',
+                    '--extractor-args', 'youtube:skip=dash,hls',
+                    '--extractor-args', 'youtube:player_client=mweb',
+                    '--no-warnings',
+                    '--quiet',
+                    video_url
+                ]
+                if cookie:
+                    cmd.extend(['--cookies', cookie])
                 
-                # Now find the downloaded file in tmpdir
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                if result.returncode == 0:
+                    audio_url = result.stdout.strip().split('\n')[-1]
+                    if audio_url.startswith('http'):
+                        print(f"✅ Got audio URL: {audio_url[:60]}...")
+                        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                        resp = requests.get(audio_url, headers=headers, stream=True, timeout=120)
+                        if resp.status_code == 200:
+                            out_path = os.path.join(tmpdir, 'audio.m4a')
+                            with open(out_path, 'wb') as f:
+                                for chunk in resp.iter_content(chunk_size=8192):
+                                    f.write(chunk)
+                            print(f"✅ Downloaded via requests: {out_path}")
+                            return out_path
+                continue
+            
+            # Normal download with format ID
+            cmd = [
+                'yt-dlp',
+                '--format', fmt,
+                '--extractor-args', f'youtube:skip=dash,hls',
+                '--extractor-args', f'youtube:player_client={client}',
+                '--no-warnings',
+                '--quiet',
+                '--no-playlist',
+                '-o', os.path.join(tmpdir, 'audio.%(ext)s'),
+                video_url
+            ]
+            if cookie:
+                cmd.extend(['--cookies', cookie])
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            
+            if result.returncode == 0:
+                # Find the downloaded file
                 all_files = list(Path(tmpdir).glob("*"))
                 print(f"📁 Files in tmpdir: {[f.name for f in all_files]}")
-                
-                # Filter by audio extensions
                 audio_extensions = {'.mp3', '.m4a', '.webm', '.opus', '.aac', '.wav', '.m4b', '.mp4', '.mkv'}
                 audio_files = [f for f in all_files if f.suffix.lower() in audio_extensions]
-                
-                # If none, take any file that is not a directory and has size > 0
                 if not audio_files:
                     audio_files = [f for f in all_files if f.is_file() and f.stat().st_size > 1000]
-                
                 if audio_files:
-                    # Pick the largest (or most recent)
                     audio_path = str(audio_files[0])
                     print(f"🎵 Found audio file: {os.path.basename(audio_path)} (size: {audio_files[0].stat().st_size} bytes)")
                     return audio_path
                 else:
-                    print(f"⚠️ No valid file found after strategy {i}")
-                    # Clean up temp dir for next attempt
-                    for f in all_files:
-                        try: os.remove(f)
-                        except: pass
-                    continue
+                    print(f"⚠️ No file found after strategy {idx}")
+            else:
+                error_msg = result.stderr[:150]
+                print(f"⚠️ Strategy {idx} failed: {error_msg}")
+            
+            # Clean up temp dir for next attempt
+            for f in Path(tmpdir).glob("*"):
+                try: os.remove(f)
+                except: pass
                 
         except Exception as e:
-            print(f"⚠️ Strategy {i} failed: {str(e)[:150]}")
-            # Clean up temp dir
-            try:
-                for f in Path(tmpdir).glob("*"):
-                    os.remove(f)
-            except:
-                pass
+            print(f"⚠️ Strategy {idx} exception: {str(e)[:150]}")
             continue
     
     raise Exception("All audio download strategies failed - no audio file produced")
@@ -308,7 +292,6 @@ def on_startup():
     except:
         print("⚠️ FFmpeg not found")
     
-    # Try to get cookies on startup
     try:
         cookies = get_youtube_cookies_enhanced()
         if cookies:
@@ -469,7 +452,7 @@ def get_video_progress(video_id: str):
     return get_progress(video_id)
 
 # ============================
-# YOUTUBE METADATA - CRITICAL FIX
+# YOUTUBE METADATA
 # ============================
 YOUTUBE_REGEX = re.compile(
     r"(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)[\w\-]+"
@@ -479,10 +462,8 @@ def is_valid_youtube_url(url: str) -> bool:
     return bool(YOUTUBE_REGEX.match(url))
 
 def get_video_metadata(url: str) -> dict:
-    """Get video metadata WITHOUT format processing"""
     try:
         cookies_path = get_youtube_cookies_enhanced()
-        
         ydl_opts = {
             "quiet": True,
             "no_warnings": True,
@@ -498,11 +479,9 @@ def get_video_metadata(url: str) -> dict:
                 }
             }
         }
-        
+        import yt_dlp
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # CRITICAL: process=False to skip format processing
             info = ydl.extract_info(url, download=False, process=False)
-            
             return {
                 "title": info.get('title', 'Unknown Title'),
                 "duration": info.get('duration', 0),
@@ -511,30 +490,23 @@ def get_video_metadata(url: str) -> dict:
                 "view_count": info.get('view_count', 0),
                 "upload_date": info.get('upload_date', None),
             }
-
     except Exception as e:
         import traceback
         print("========== FULL ERROR ==========")
         traceback.print_exc()
         print("================================")
-        
-        raise HTTPException(
-            status_code=400,
-            detail=f"VIDEO_METADATA_FAILED: {str(e)}"
-        )
+        raise HTTPException(status_code=400, detail=f"VIDEO_METADATA_FAILED: {str(e)}")
 
 # ============================
-# YOUTUBE TRANSCRIPT - FIXED
+# YOUTUBE TRANSCRIPT
 # ============================
 def get_video_transcript(video_id: str) -> str:
-    """Extract audio with enhanced fallback strategies"""
     try:
-        # Try transcript API first (handle both versions)
+        # Try transcript API first
         try:
             from youtube_transcript_api import YouTubeTranscriptApi
             print(f"📝 Trying direct transcript for: {video_id}")
             try:
-                # Newer API
                 transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
                 transcript = None
                 for t in transcript_list:
@@ -543,34 +515,30 @@ def get_video_transcript(video_id: str) -> str:
                         break
                 if not transcript:
                     transcript = next(iter(transcript_list))
-                transcript_data = transcript.fetch()
-                transcript_text = " ".join([item['text'] for item in transcript_data])
-                print(f"✅ Direct transcript fetched (new API)")
-                return transcript_text
+                data = transcript.fetch()
+                text = " ".join([item['text'] for item in data])
+                print("✅ Direct transcript fetched (new API)")
+                return text
             except AttributeError:
-                # Older API fallback
-                transcript_list = YouTubeTranscriptApi.get_transcripts(video_id, languages=['en'])
-                if transcript_list:
-                    transcript_text = " ".join([item['text'] for item in transcript_list[0]])
-                    print(f"✅ Direct transcript fetched (old API)")
-                    return transcript_text
+                # Fallback for older API
+                data = YouTubeTranscriptApi.get_transcript(video_id, languages=['en'])
+                if data:
+                    text = " ".join([item['text'] for item in data])
+                    print("✅ Direct transcript fetched (old API)")
+                    return text
                 else:
                     raise Exception("No transcript found")
         except Exception as e:
             print(f"⚠️ Direct transcript failed: {e}")
         
-        # Fallback: Download audio
+        # Fallback: download audio
         with tempfile.TemporaryDirectory() as tmpdir:
             print(f"🔊 Downloading audio for: {video_id}")
-            
-            audio_path = download_audio_with_fallbacks(video_id, tmpdir)
-            
+            audio_path = download_audio_with_subprocess(video_id, tmpdir)
             if not audio_path or not os.path.exists(audio_path):
                 raise Exception("Failed to download audio")
-            
             print(f"🎵 File: {os.path.basename(audio_path)}")
             
-            # Transcribe
             print("🧠 Loading Whisper...")
             try:
                 model = whisper.load_model("base")
@@ -588,7 +556,6 @@ def get_video_transcript(video_id: str) -> str:
             except Exception as e:
                 print(f"❌ Transcription error: {e}")
                 raise HTTPException(status_code=400, detail=f"Failed to transcribe: {str(e)}")
-                
     except HTTPException:
         raise
     except Exception as e:
@@ -1110,9 +1077,7 @@ def delete_feedback(
 # COOKIE EXPORT HELPER
 # ============================
 def export_cookies_for_production():
-    """Helper to export cookies for production"""
     import base64
-    
     try:
         if BROWSER_COOKIE_AVAILABLE:
             cookies = browser_cookie3.chrome(domain_name='.youtube.com')
@@ -1125,17 +1090,15 @@ def export_cookies_for_production():
                         cookie_lines.append(
                             f"{cookie.domain}\tTRUE\t{cookie.path}\t{secure}\t{expires}\t{cookie.name}\t{cookie.value}"
                         )
-                
                 cookie_content = "\n".join(cookie_lines)
                 cookie_b64 = base64.b64encode(cookie_content.encode()).decode()
-                print("✅ Generated cookie base64. Add this to YOUTUBE_COOKIES_B64 environment variable:")
+                print("✅ Generated cookie base64. Add to YOUTUBE_COOKIES_B64 environment variable:")
                 print("="*50)
                 print(cookie_b64)
                 print("="*50)
                 return cookie_b64
     except Exception as e:
         print(f"⚠️ Could not export cookies: {e}")
-    
     return None
 
 # ============================
