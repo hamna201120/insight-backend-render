@@ -137,14 +137,14 @@ def get_youtube_cookies():
 # DOWNLOAD AUDIO WITH FALLBACKS - CRITICAL FIX
 # ============================
 def download_audio_with_fallbacks(video_id: str, tmpdir: str) -> str:
-    """Download audio with multiple fallback strategies - CRITICAL FIX with process=False"""
+    """Download audio - STOP on first success"""
     
     video_url = f"https://www.youtube.com/watch?v={video_id}"
     cookies_path = get_youtube_cookies_enhanced()
     
-    # Strategy 1: mweb client with process=False (THE KEY FIX)
+    # Strategies - ORDERED BY RELIABILITY
     strategies = [
-        # Strategy 1: mweb client with process=False - THIS IS THE FIX
+        # Strategy 1: mweb client with process=False (MOST RELIABLE)
         {
             'outtmpl': os.path.join(tmpdir, 'audio.%(ext)s'),
             'cookiefile': cookies_path if cookies_path else None,
@@ -153,7 +153,6 @@ def download_audio_with_fallbacks(video_id: str, tmpdir: str) -> str:
                     'player_client': ['mweb'],
                 }
             },
-            'process': False,  # CRITICAL: Skip format processing
         },
         # Strategy 2: mweb with format specified
         {
@@ -165,7 +164,6 @@ def download_audio_with_fallbacks(video_id: str, tmpdir: str) -> str:
                     'player_client': ['mweb'],
                 }
             },
-            'process': False,
         },
         # Strategy 3: web client
         {
@@ -176,9 +174,18 @@ def download_audio_with_fallbacks(video_id: str, tmpdir: str) -> str:
                     'player_client': ['web'],
                 }
             },
-            'process': False,
         },
-        # Strategy 4: no cookies
+        # Strategy 4: android client
+        {
+            'outtmpl': os.path.join(tmpdir, 'audio.%(ext)s'),
+            'cookiefile': cookies_path if cookies_path else None,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android'],
+                }
+            },
+        },
+        # Strategy 5: No cookies (last resort)
         {
             'outtmpl': os.path.join(tmpdir, 'audio.%(ext)s'),
             'cookiefile': None,
@@ -187,13 +194,13 @@ def download_audio_with_fallbacks(video_id: str, tmpdir: str) -> str:
                     'player_client': ['mweb'],
                 }
             },
-            'process': False,
         }
     ]
     
     for i, opts in enumerate(strategies, 1):
         try:
             print(f"🎯 Trying strategy {i}...")
+            
             ydl_opts = {
                 'quiet': True,
                 'no_warnings': True,
@@ -211,7 +218,7 @@ def download_audio_with_fallbacks(video_id: str, tmpdir: str) -> str:
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # CRITICAL: process=False tells yt-dlp to NOT process formats
+                # CRITICAL: process=False to skip format processing
                 info = ydl.extract_info(video_url, download=True, process=False)
                 print(f"✅ Strategy {i} succeeded! Title: {info.get('title', 'Unknown')}")
                 
@@ -224,12 +231,18 @@ def download_audio_with_fallbacks(video_id: str, tmpdir: str) -> str:
                     audio_files = all_files
                 
                 if audio_files:
-                    return str(audio_files[0])
+                    audio_path = str(audio_files[0])
+                    print(f"🎵 Audio downloaded: {os.path.basename(audio_path)}")
+                    return audio_path  # CRITICAL: Return immediately on success
+                else:
+                    print(f"⚠️ No audio file found after strategy {i}")
+                    continue
                 
         except Exception as e:
             print(f"⚠️ Strategy {i} failed: {str(e)[:150]}")
             continue
     
+    # If we get here, all strategies failed
     raise Exception("All audio download strategies failed")
 
 # ============================
@@ -447,7 +460,7 @@ def get_video_progress(video_id: str):
     return get_progress(video_id)
 
 # ============================
-# YOUTUBE METADATA - CRITICAL FIX WITH process=False
+# YOUTUBE METADATA - CRITICAL FIX
 # ============================
 YOUTUBE_REGEX = re.compile(
     r"(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)[\w\-]+"
@@ -457,15 +470,14 @@ def is_valid_youtube_url(url: str) -> bool:
     return bool(YOUTUBE_REGEX.match(url))
 
 def get_video_metadata(url: str) -> dict:
-    """Get video metadata WITHOUT format processing - THE FIX"""
+    """Get video metadata WITHOUT format processing"""
     try:
         cookies_path = get_youtube_cookies_enhanced()
         
-        # CRITICAL: Use mweb client with process=False
         ydl_opts = {
             "quiet": True,
             "no_warnings": True,
-            "extract_flat": True,  # Only get basic info
+            "extract_flat": True,
             "nocheckcertificate": True,
             "no_color": True,
             "cookiefile": cookies_path if cookies_path else None,
@@ -473,13 +485,13 @@ def get_video_metadata(url: str) -> dict:
             "max_sleep_interval": 6,
             "extractor_args": {
                 "youtube": {
-                    "player_client": ["mweb"],  # Mobile web client works
+                    "player_client": ["mweb"],
                 }
             }
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # CRITICAL: process=False tells yt-dlp to NOT process formats
+            # CRITICAL: process=False to skip format processing
             info = ydl.extract_info(url, download=False, process=False)
             
             return {
@@ -506,12 +518,13 @@ def get_video_metadata(url: str) -> dict:
 # YOUTUBE TRANSCRIPT - FIXED
 # ============================
 def get_video_transcript(video_id: str) -> str:
-    """Extract audio with enhanced fallback strategies - FIXED"""
+    """Extract audio with enhanced fallback strategies"""
     try:
         # Try transcript API first
         try:
             from youtube_transcript_api import YouTubeTranscriptApi
             print(f"📝 Trying direct transcript for: {video_id}")
+            # Fix: Use correct method for newer versions
             transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
             transcript = None
             for t in transcript_list:
